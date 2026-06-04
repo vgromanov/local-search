@@ -1,0 +1,10 @@
+{
+  "id": "local-smart-lookup",
+  "name": "Local Smart Lookup",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Question-first semantic search over your vault using local oMLX embeddings, local vector storage, Dataview filters, and REST API routes.",
+  "author": "",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
