@@ -1,8 +1,38 @@
-import * as lancedb from "@lancedb/lancedb";
-import type { Connection, Table } from "@lancedb/lancedb";
 import type { DataAdapter, Plugin } from "obsidian";
 import { normalizePath } from "obsidian";
 import type { SearchOptions, SearchResult, VectorRecord } from "./types";
+
+type LanceDbModule = {
+  connect: (uri: string) => Promise<Connection>;
+};
+
+type Query = {
+  where: (predicate: string) => Query;
+  select: (columns: string[]) => Query;
+  limit: (limit: number) => Query;
+  toArray: () => Promise<Record<string, unknown>[]>;
+};
+
+type VectorQuery = Query & {
+  distanceType: (distanceType: "cosine") => VectorQuery;
+};
+
+type Table = {
+  close: () => void;
+  add: (data: Record<string, unknown>[]) => Promise<unknown>;
+  update: (opts: { where: string; values: Record<string, unknown> }) => Promise<unknown>;
+  delete: (predicate: string) => Promise<unknown>;
+  countRows: (filter?: string) => Promise<number>;
+  query: () => Query;
+  vectorSearch: (vector: number[]) => VectorQuery;
+};
+
+type Connection = {
+  close: () => void;
+  tableNames: () => Promise<string[]>;
+  openTable: (name: string) => Promise<Table>;
+  createTable: (name: string, data: Record<string, unknown>[]) => Promise<Table>;
+};
 
 type LanceChunkRow = Omit<VectorRecord,
   "contentHash" |
@@ -153,11 +183,14 @@ function buildWhere(options: SearchOptions): string | undefined {
 export class LanceVectorStore {
   private connection: Connection | null = null;
   private table: Table | null = null;
+  private lancedb: LanceDbModule | null = null;
   private dbPath: string;
+  private pluginDir: string;
   private tableName = "chunks";
 
   constructor(private plugin: Plugin, private adapter: DataAdapter) {
-    this.dbPath = normalizePath(`${plugin.manifest.dir ?? ".obsidian/plugins/local-smart-lookup"}/lancedb`);
+    this.pluginDir = normalizePath(plugin.manifest.dir ?? ".obsidian/plugins/local-smart-lookup");
+    this.dbPath = normalizePath(`${this.pluginDir}/lancedb`);
   }
 
   async load(): Promise<void> {
@@ -329,8 +362,26 @@ export class LanceVectorStore {
     if (!(await this.adapter.exists(this.dbPath))) {
       await this.adapter.mkdir(this.dbPath);
     }
-    this.connection = await lancedb.connect(this.dbPath);
+    const lancedb = this.loadLanceDb();
+    this.connection = await lancedb.connect(this.absoluteAdapterPath(this.dbPath));
     return this.connection;
+  }
+
+  private loadLanceDb(): LanceDbModule {
+    if (this.lancedb) return this.lancedb;
+    const pluginMainPath = `${this.absoluteAdapterPath(this.pluginDir)}/main.js`;
+    const nodeRequire = require("module").createRequire(pluginMainPath);
+    this.lancedb = nodeRequire("@lancedb/lancedb") as LanceDbModule;
+    return this.lancedb;
+  }
+
+  private absoluteAdapterPath(path: string): string {
+    const adapterWithBase = this.adapter as DataAdapter & { getBasePath?: () => string };
+    const basePath = adapterWithBase.getBasePath?.();
+    if (!basePath) {
+      throw new Error("LanceDB requires the desktop file-system adapter so the plugin can resolve a local database path.");
+    }
+    return `${basePath}/${normalizePath(path)}`;
   }
 
   private async getTable(): Promise<Table | null> {

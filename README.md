@@ -102,8 +102,20 @@ npm install
 npm run build
 ```
 
-Copy or symlink `main.js`, `manifest.json`, and `styles.css` into:
+For development, symlink the whole repository into:
 
 ```text
 <vault>/.obsidian/plugins/local-smart-lookup/
+```
+
+or copy `main.js`, `manifest.json`, `styles.css`, `package.json`, and `package-lock.json` there and run:
+
+```bash
+npm install --omit=dev
+```
+
+LanceDB is loaded from the plugin folder's local `node_modules`, so the runtime dependency must exist at:
+
+```text
+<vault>/.obsidian/plugins/local-smart-lookup/node_modules/@lancedb/lancedb/
 ```
