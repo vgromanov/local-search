@@ -18,6 +18,7 @@ export default class LocalSmartLookupPlugin extends Plugin {
   indexQueue: PersistentIndexQueue;
   searchService: SearchService;
   dataviewFilter: DataviewFilter;
+  unregisterRestRoutes: (() => void) | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -76,16 +77,26 @@ export default class LocalSmartLookupPlugin extends Plugin {
     }));
 
     this.addSettingTab(new LocalSmartLookupSettingTab(this.app, this));
-    registerRestRoutes(this);
+    this.tryRegisterRestRoutes();
+    this.registerEvent(this.app.workspace.on("obsidian-local-rest-api:loaded" as never, () => {
+      this.tryRegisterRestRoutes();
+    }));
     this.indexQueue.schedule(2_000);
 
     new Notice("Local Smart Lookup loaded.");
   }
 
   onunload(): void {
+    this.unregisterRestRoutes?.();
+    this.unregisterRestRoutes = null;
     this.indexQueue?.stop();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_LOCAL_SMART_LOOKUP);
     this.vectorStore?.close();
+  }
+
+  tryRegisterRestRoutes(): void {
+    if (this.unregisterRestRoutes) return;
+    this.unregisterRestRoutes = registerRestRoutes(this);
   }
 
   async activateView(): Promise<void> {

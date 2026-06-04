@@ -74,7 +74,7 @@ export interface ObsidianRestPublicApi {
     get?: (handler: (req: unknown, res: unknown) => void | Promise<void>) => unknown;
     post?: (handler: (req: unknown, res: unknown) => void | Promise<void>) => unknown;
   };
-  sendSuccess: (res: unknown, body: unknown) => void;
+  sendSuccess?: (res: unknown, body: unknown) => void;
   sendError?: (res: unknown, status: number, message: string) => void;
 }
 

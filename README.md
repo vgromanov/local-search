@@ -14,7 +14,7 @@ This implementation is intentionally local-first:
 - Vectors and metadata are stored locally with embedded LanceDB in the vault plugin folder.
 - Optional reranking can call a local rerank endpoint.
 - Dataview can narrow the searchable path set before semantic ranking.
-- If the REST API plugin is installed, this plugin registers extension routes.
+- If the Obsidian Local REST API plugin or newer REST API plugin is installed, this plugin registers extension routes.
 
 ## Expected local model server
 
@@ -82,7 +82,7 @@ Full vault indexing now queues every markdown file instead of running one foregr
 
 ## REST routes
 
-When the REST API plugin with extension support is enabled, routes are registered under:
+When a REST API plugin with extension support is enabled, routes are registered under:
 
 - `POST /local-smart-lookup/search/`
 - `POST /local-smart-lookup/reindex/`

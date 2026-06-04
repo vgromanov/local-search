@@ -1,6 +1,24 @@
 import type LocalSmartLookupPlugin from "./main";
 import type { ObsidianRestPublicApi } from "./types";
 
+type RouteHandler = (req: unknown, res: unknown) => void | Promise<void>;
+
+type Route = {
+  get?: (handler: RouteHandler) => unknown;
+  post?: (handler: RouteHandler) => unknown;
+};
+
+type RestApi = ObsidianRestPublicApi & {
+  addRoute: (path: string) => Route;
+  unregister?: () => void;
+};
+
+type ExpressLikeResponse = {
+  status?: (status: number) => ExpressLikeResponse;
+  json?: (body: unknown) => void;
+  send?: (body: unknown) => void;
+};
+
 function readJsonBody(req: unknown): Record<string, unknown> {
   const request = req as {
     body?: unknown;
@@ -11,27 +29,51 @@ function readJsonBody(req: unknown): Record<string, unknown> {
   return {};
 }
 
-function sendError(api: ObsidianRestPublicApi, res: unknown, status: number, error: unknown): void {
+function sendJson(api: RestApi, res: unknown, body: unknown, status = 200): void {
+  if (api.sendSuccess && status === 200) {
+    api.sendSuccess(res, body);
+    return;
+  }
+
+  const response = res as ExpressLikeResponse;
+  if (response.status) response.status(status);
+  if (response.json) {
+    response.json(body);
+    return;
+  }
+  if (response.send) {
+    response.send(body);
+  }
+}
+
+function sendError(api: RestApi, res: unknown, status: number, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   if (api.sendError) {
     api.sendError(res, status, message);
     return;
   }
-  api.sendSuccess(res, { ok: false, error: message, status });
+  sendJson(api, res, { ok: false, error: message, status }, status);
 }
 
-export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
-  const api = (plugin.app as unknown as {
+function getRestApi(plugin: LocalSmartLookupPlugin): RestApi | null {
+  const plugins = (plugin.app as unknown as {
     plugins?: {
-      plugins?: Record<string, { getPublicApi?: (manifest: unknown) => ObsidianRestPublicApi | null }>;
+      plugins?: Record<string, { getPublicApi?: (manifest: unknown) => RestApi | null }>;
     };
-  }).plugins?.plugins?.["obsidian-api"]?.getPublicApi?.(plugin.manifest);
+  }).plugins?.plugins;
 
-  if (!api) return;
+  return plugins?.["obsidian-local-rest-api"]?.getPublicApi?.(plugin.manifest)
+    ?? plugins?.["obsidian-api"]?.getPublicApi?.(plugin.manifest)
+    ?? null;
+}
+
+export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void) | null {
+  const api = getRestApi(plugin);
+  if (!api) return null;
 
   api.addRoute("/local-smart-lookup/status/")
     .get?.(async (_req, res) => {
-      api.sendSuccess(res, {
+      sendJson(api, res, {
         index: await plugin.indexer.status(),
         queue: plugin.indexQueue.status()
       });
@@ -58,7 +100,7 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
           tags,
           frontmatter
         });
-        api.sendSuccess(res, { results });
+        sendJson(api, res, { results });
       } catch (error) {
         sendError(api, res, 500, error);
       }
@@ -68,7 +110,7 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
     .post?.(async (_req, res) => {
       try {
         await plugin.indexQueue.enqueueVault();
-        api.sendSuccess(res, {
+        sendJson(api, res, {
           index: await plugin.indexer.status(),
           queue: plugin.indexQueue.status()
         });
@@ -76,4 +118,6 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
         sendError(api, res, 500, error);
       }
     });
+
+  return () => api.unregister?.();
 }
