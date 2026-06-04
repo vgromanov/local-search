@@ -100,7 +100,19 @@ function listText(values: string[]): string {
 
 function toRow(record: VectorRecord): LanceChunkRow {
   return {
-    ...record,
+    id: record.id,
+    path: record.path,
+    folder: record.folder,
+    basename: record.basename,
+    mtime: record.mtime,
+    size: record.size,
+    position: record.position,
+    text: record.text,
+    vector: record.vector,
+    title: record.title,
+    status: record.status,
+    project: record.project,
+    type: record.type,
     content_hash: record.contentHash,
     body_hash: record.bodyHash,
     frontmatter_hash: record.frontmatterHash,
