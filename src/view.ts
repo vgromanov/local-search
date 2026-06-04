@@ -64,8 +64,14 @@ export class LocalSmartLookupView extends ItemView {
   }
 
   private async renderStatus(): Promise<void> {
-    const status = await this.plugin.indexer.status();
-    this.statusEl.setText(`${status.indexedFiles} files, ${status.indexedChunks} chunks indexed${status.isIndexing ? " · indexing" : ""}`);
+    const indexStatus = await this.plugin.indexer.status();
+    const queueStatus = this.plugin.indexQueue.status();
+    const queueText = queueStatus.isProcessing
+      ? ` · indexing ${queueStatus.processingPath}`
+      : queueStatus.queued > 0
+        ? ` · ${queueStatus.queued} queued`
+        : "";
+    this.statusEl.setText(`${indexStatus.indexedFiles} files, ${indexStatus.indexedChunks} chunks indexed${queueText}`);
   }
 
   private renderEmpty(text: string): void {
@@ -76,9 +82,9 @@ export class LocalSmartLookupView extends ItemView {
   private async runIndex(): Promise<void> {
     try {
       this.renderEmpty("Indexing markdown files...");
-      await this.plugin.indexer.indexVault();
+      await this.plugin.indexQueue.enqueueVault();
       await this.renderStatus();
-      this.renderEmpty("Index ready. Ask a question to search.");
+      this.renderEmpty("Indexing queued. You can search while the queue works.");
     } catch (error) {
       new Notice(`Indexing failed: ${error instanceof Error ? error.message : String(error)}`);
       this.renderEmpty("Indexing failed. Check your local embedding server settings.");

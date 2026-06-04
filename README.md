@@ -68,6 +68,18 @@ This lets the plugin make predictable reindex decisions:
 - body, chunking, or embedding-model changes re-embed
 - rename/move events update path metadata first, then verify whether content also changed
 
+## Index queue
+
+Indexing work is persisted at:
+
+```text
+<vault>/.obsidian/plugins/local-smart-lookup/index-queue.json
+```
+
+The queue is deduplicated by note path. If the same note changes several times while sync or editing is still active, only the latest queued version is processed. The queue is processed sequentially and resumes automatically after Obsidian restarts.
+
+Full vault indexing now queues every markdown file instead of running one foreground batch. If the local embedding server is unavailable, the queue pauses on the failed file and retries after a delay.
+
 ## REST routes
 
 When the REST API plugin with extension support is enabled, routes are registered under:

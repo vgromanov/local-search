@@ -31,7 +31,10 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
 
   api.addRoute("/local-smart-lookup/status/")
     .get?.(async (_req, res) => {
-      api.sendSuccess(res, await plugin.indexer.status());
+      api.sendSuccess(res, {
+        index: await plugin.indexer.status(),
+        queue: plugin.indexQueue.status()
+      });
     });
 
   api.addRoute("/local-smart-lookup/search/")
@@ -64,8 +67,11 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
   api.addRoute("/local-smart-lookup/reindex/")
     .post?.(async (_req, res) => {
       try {
-        await plugin.indexer.indexVault();
-        api.sendSuccess(res, await plugin.indexer.status());
+        await plugin.indexQueue.enqueueVault();
+        api.sendSuccess(res, {
+          index: await plugin.indexer.status(),
+          queue: plugin.indexQueue.status()
+        });
       } catch (error) {
         sendError(api, res, 500, error);
       }
