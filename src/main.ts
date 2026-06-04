@@ -6,13 +6,13 @@ import { registerRestRoutes } from "./restRoutes";
 import { SearchService } from "./searchService";
 import { DEFAULT_SETTINGS, LocalSmartLookupSettingTab } from "./settings";
 import type { LocalSmartLookupSettings } from "./types";
-import { JsonVectorStore } from "./vectorStore";
+import { LanceVectorStore } from "./vectorStore";
 import { LocalSmartLookupView, VIEW_TYPE_LOCAL_SMART_LOOKUP } from "./view";
 
 export default class LocalSmartLookupPlugin extends Plugin {
   settings: LocalSmartLookupSettings;
   modelClient: LocalModelClient;
-  vectorStore: JsonVectorStore;
+  vectorStore: LanceVectorStore;
   indexer: VaultIndexer;
   searchService: SearchService;
   dataviewFilter: DataviewFilter;
@@ -21,7 +21,7 @@ export default class LocalSmartLookupPlugin extends Plugin {
     await this.loadSettings();
 
     this.modelClient = new LocalModelClient(() => this.settings);
-    this.vectorStore = new JsonVectorStore(this, this.app.vault.adapter);
+    this.vectorStore = new LanceVectorStore(this, this.app.vault.adapter);
     await this.vectorStore.load();
     this.dataviewFilter = new DataviewFilter(this.app);
     this.indexer = new VaultIndexer(this.app, this.vectorStore, this.modelClient, () => this.settings);
@@ -50,14 +50,25 @@ export default class LocalSmartLookupPlugin extends Plugin {
 
     this.registerEvent(this.app.vault.on("modify", (file) => {
       if (file instanceof TFile && file.extension === "md") {
-        void this.indexer.indexFile(file).then(() => this.vectorStore.save());
+        void this.indexer.indexFile(file);
+      }
+    }));
+
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      if (file instanceof TFile && file.extension === "md") {
+        void this.indexer.indexFile(file);
+      }
+    }));
+
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      if (file instanceof TFile && file.extension === "md") {
+        void this.indexer.renameFile(oldPath, file).then(() => this.indexer.indexFile(file));
       }
     }));
 
     this.registerEvent(this.app.vault.on("delete", async () => {
       const markdownPaths = new Set(this.app.vault.getMarkdownFiles().map((file) => file.path));
-      this.vectorStore.removeMissingPaths(markdownPaths);
-      await this.vectorStore.save();
+      await this.vectorStore.removeMissingPaths(markdownPaths);
     }));
 
     this.addSettingTab(new LocalSmartLookupSettingTab(this.app, this));
@@ -68,6 +79,7 @@ export default class LocalSmartLookupPlugin extends Plugin {
 
   onunload(): void {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_LOCAL_SMART_LOOKUP);
+    this.vectorStore?.close();
   }
 
   async activateView(): Promise<void> {

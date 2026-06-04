@@ -11,7 +11,7 @@ It is inspired by Smart Lookup's useful boundary:
 This implementation is intentionally local-first:
 
 - Embeddings are requested from a local oMLX/OpenAI-compatible model server.
-- Vectors are stored locally in the vault plugin folder.
+- Vectors and metadata are stored locally with embedded LanceDB in the vault plugin folder.
 - Optional reranking can call a local rerank endpoint.
 - Dataview can narrow the searchable path set before semantic ranking.
 - If the REST API plugin is installed, this plugin registers extension routes.
@@ -44,6 +44,30 @@ For reranking, configure a local endpoint that accepts:
 
 and returns either `results: [{ index, relevance_score }]` or an array of scored results.
 
+## Index storage
+
+The local index lives at:
+
+```text
+<vault>/.obsidian/plugins/local-smart-lookup/lancedb/
+```
+
+Each chunk row stores:
+
+- embedding vector
+- note path, folder, basename, mtime, and size
+- full content hash, body hash, frontmatter hash, chunking config hash
+- embedding model and embedding dimension
+- frontmatter JSON plus common scalar fields: `title`, `status`, `project`, `type`
+- frontmatter tags and inline tags
+
+This lets the plugin make predictable reindex decisions:
+
+- unchanged content is skipped
+- frontmatter-only edits update metadata without re-embedding
+- body, chunking, or embedding-model changes re-embed
+- rename/move events update path metadata first, then verify whether content also changed
+
 ## REST routes
 
 When the REST API plugin with extension support is enabled, routes are registered under:
@@ -59,9 +83,17 @@ Search body:
   "query": "local-first AI and user control strongest arguments",
   "limit": 10,
   "dataviewSource": "#research or \"Projects\"",
-  "dataviewQuery": "LIST FROM #research WHERE status = \"active\""
+  "dataviewQuery": "LIST FROM #research WHERE status = \"active\"",
+  "tags": ["research", "ai"],
+  "frontmatter": {
+    "status": "active",
+    "project": "Local Search"
+  },
+  "where": "type = 'note'"
 }
 ```
+
+`tags`, `frontmatter`, and `where` are applied through LanceDB metadata filtering. Dataview remains optional for richer vault-specific filters.
 
 ## Development
 

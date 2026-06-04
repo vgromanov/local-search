@@ -1,82 +1,358 @@
+import * as lancedb from "@lancedb/lancedb";
+import type { Connection, Table } from "@lancedb/lancedb";
 import type { DataAdapter, Plugin } from "obsidian";
 import { normalizePath } from "obsidian";
-import type { VectorRecord } from "./types";
+import type { SearchOptions, SearchResult, VectorRecord } from "./types";
 
-type StoredIndex = {
-  version: 1;
-  updatedAt: string;
-  records: VectorRecord[];
+type LanceChunkRow = Omit<VectorRecord,
+  "contentHash" |
+  "bodyHash" |
+  "frontmatterHash" |
+  "chunkingConfigHash" |
+  "embeddingModel" |
+  "embeddingDim" |
+  "indexedAt" |
+  "tags" |
+  "inlineTags" |
+  "frontmatterTags" |
+  "aliases" |
+  "frontmatter" |
+  "frontmatterKeys"
+> & {
+  vector: number[];
+  content_hash: string;
+  body_hash: string;
+  frontmatter_hash: string;
+  chunking_config_hash: string;
+  embedding_model: string;
+  embedding_dim: number;
+  indexed_at: string;
+  tags_json: string;
+  tags_text: string;
+  inline_tags_json: string;
+  frontmatter_tags_json: string;
+  aliases_json: string;
+  aliases_text: string;
+  frontmatter_json: string;
+  frontmatter_keys_json: string;
+  frontmatter_keys_text: string;
 };
 
-export class JsonVectorStore {
-  private records = new Map<string, VectorRecord>();
-  private indexPath: string;
+export type IndexDecision =
+  | "missing"
+  | "unchanged"
+  | "metadata-only"
+  | "content-changed"
+  | "config-changed";
+
+export type ExistingPathState = {
+  exists: boolean;
+  contentHash?: string;
+  bodyHash?: string;
+  frontmatterHash?: string;
+  chunkingConfigHash?: string;
+  embeddingModel?: string;
+  embeddingDim?: number;
+};
+
+function escapeSql(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+function normalizeTag(tag: string): string {
+  const trimmed = tag.trim();
+  return trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
+}
+
+function listText(values: string[]): string {
+  return `|${values.map((value) => value.toLowerCase()).join("|")}|`;
+}
+
+function toRow(record: VectorRecord): LanceChunkRow {
+  return {
+    ...record,
+    content_hash: record.contentHash,
+    body_hash: record.bodyHash,
+    frontmatter_hash: record.frontmatterHash,
+    chunking_config_hash: record.chunkingConfigHash,
+    embedding_model: record.embeddingModel,
+    embedding_dim: record.embeddingDim,
+    indexed_at: record.indexedAt,
+    tags_json: JSON.stringify(record.tags),
+    tags_text: listText(record.tags),
+    inline_tags_json: JSON.stringify(record.inlineTags),
+    frontmatter_tags_json: JSON.stringify(record.frontmatterTags),
+    aliases_json: JSON.stringify(record.aliases),
+    aliases_text: listText(record.aliases),
+    frontmatter_json: JSON.stringify(record.frontmatter),
+    frontmatter_keys_json: JSON.stringify(record.frontmatterKeys),
+    frontmatter_keys_text: listText(record.frontmatterKeys)
+  };
+}
+
+function parseJson<T>(value: unknown, fallback: T): T {
+  if (typeof value !== "string") return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function fromRow(row: Record<string, unknown>): SearchResult {
+  const distance = typeof row._distance === "number" ? row._distance : undefined;
+  return {
+    id: String(row.id ?? ""),
+    path: String(row.path ?? ""),
+    folder: String(row.folder ?? ""),
+    basename: String(row.basename ?? ""),
+    mtime: Number(row.mtime ?? 0),
+    size: Number(row.size ?? 0),
+    position: Number(row.position ?? 0),
+    text: String(row.text ?? ""),
+    distance,
+    score: distance === undefined ? 0 : 1 / (1 + distance),
+    tags: parseJson<string[]>(row.tags_json, []),
+    frontmatter: parseJson<Record<string, unknown>>(row.frontmatter_json, {})
+  };
+}
+
+function pathWhere(path: string): string {
+  return `path = '${escapeSql(path)}'`;
+}
+
+function buildWhere(options: SearchOptions): string | undefined {
+  const clauses: string[] = [];
+
+  if (options.where?.trim()) {
+    clauses.push(`(${options.where.trim()})`);
+  }
+
+  if (options.allowedPaths && options.allowedPaths.size > 0) {
+    const paths = Array.from(options.allowedPaths).map((path) => `'${escapeSql(path)}'`);
+    clauses.push(`path IN (${paths.join(", ")})`);
+  }
+
+  for (const tag of options.tags ?? []) {
+    const normalized = normalizeTag(tag).toLowerCase();
+    if (normalized) clauses.push(`tags_text LIKE '%|${escapeSql(normalized)}|%'`);
+  }
+
+  for (const [key, value] of Object.entries(options.frontmatter ?? {})) {
+    if (["status", "project", "type", "title"].includes(key)) {
+      clauses.push(`${key} = '${escapeSql(String(value))}'`);
+      continue;
+    }
+    const jsonNeedle = `"${key}":${JSON.stringify(value)}`;
+    clauses.push(`frontmatter_json LIKE '%${escapeSql(jsonNeedle)}%'`);
+  }
+
+  return clauses.length > 0 ? clauses.join(" AND ") : undefined;
+}
+
+export class LanceVectorStore {
+  private connection: Connection | null = null;
+  private table: Table | null = null;
+  private dbPath: string;
+  private tableName = "chunks";
 
   constructor(private plugin: Plugin, private adapter: DataAdapter) {
-    this.indexPath = normalizePath(`${plugin.manifest.dir ?? ".obsidian/plugins/local-smart-lookup"}/vectors.json`);
+    this.dbPath = normalizePath(`${plugin.manifest.dir ?? ".obsidian/plugins/local-smart-lookup"}/lancedb`);
   }
 
   async load(): Promise<void> {
-    if (!(await this.adapter.exists(this.indexPath))) {
-      this.records.clear();
-      return;
-    }
-    const json = JSON.parse(await this.adapter.read(this.indexPath)) as StoredIndex;
-    this.records = new Map((json.records ?? []).map((record) => [record.id, record]));
+    await this.ensureConnection();
   }
 
-  async save(): Promise<void> {
-    const payload: StoredIndex = {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      records: Array.from(this.records.values())
+  close(): void {
+    this.table?.close();
+    this.connection?.close();
+    this.table = null;
+    this.connection = null;
+  }
+
+  async count(): Promise<number> {
+    const table = await this.getTable();
+    return table ? table.countRows() : 0;
+  }
+
+  async paths(): Promise<Set<string>> {
+    const table = await this.getTable();
+    if (!table) return new Set();
+    const rows = await table.query().select(["path"]).toArray();
+    return new Set(rows.map((row) => String(row.path)));
+  }
+
+  async stateForPath(path: string): Promise<ExistingPathState> {
+    const table = await this.getTable();
+    if (!table) return { exists: false };
+
+    const rows = await table.query()
+      .where(pathWhere(path))
+      .select([
+        "content_hash",
+        "body_hash",
+        "frontmatter_hash",
+        "chunking_config_hash",
+        "embedding_model",
+        "embedding_dim"
+      ])
+      .limit(1)
+      .toArray();
+
+    if (rows.length === 0) return { exists: false };
+    const row = rows[0];
+    return {
+      exists: true,
+      contentHash: String(row.content_hash ?? ""),
+      bodyHash: String(row.body_hash ?? ""),
+      frontmatterHash: String(row.frontmatter_hash ?? ""),
+      chunkingConfigHash: String(row.chunking_config_hash ?? ""),
+      embeddingModel: String(row.embedding_model ?? ""),
+      embeddingDim: Number(row.embedding_dim ?? 0)
     };
-    await this.adapter.write(this.indexPath, JSON.stringify(payload, null, 2));
   }
 
-  all(): VectorRecord[] {
-    return Array.from(this.records.values());
-  }
-
-  count(): number {
-    return this.records.size;
-  }
-
-  paths(): Set<string> {
-    return new Set(Array.from(this.records.values()).map((record) => record.path));
-  }
-
-  replacePath(path: string, records: VectorRecord[]): void {
-    for (const [id, record] of this.records.entries()) {
-      if (record.path === path) this.records.delete(id);
+  decideIndex(existing: ExistingPathState, next: {
+    contentHash: string;
+    bodyHash: string;
+    frontmatterHash: string;
+    chunkingConfigHash: string;
+    embeddingModel: string;
+  }): IndexDecision {
+    if (!existing.exists) return "missing";
+    if (existing.chunkingConfigHash !== next.chunkingConfigHash || existing.embeddingModel !== next.embeddingModel) {
+      return "config-changed";
     }
-    for (const record of records) {
-      this.records.set(record.id, record);
+    if (existing.contentHash === next.contentHash) return "unchanged";
+    if (existing.bodyHash === next.bodyHash && existing.frontmatterHash !== next.frontmatterHash) {
+      return "metadata-only";
     }
+    return "content-changed";
   }
 
-  removeMissingPaths(existingPaths: Set<string>): number {
+  async replacePath(path: string, records: VectorRecord[]): Promise<void> {
+    await this.deletePath(path);
+    if (records.length === 0) return;
+    const table = await this.ensureTable(records);
+    await table.add(records.map(toRow));
+  }
+
+  async updatePathMetadata(path: string, metadata: Partial<VectorRecord>): Promise<void> {
+    const table = await this.getTable();
+    if (!table) return;
+    const tags = metadata.tags ?? [];
+    const inlineTags = metadata.inlineTags ?? [];
+    const frontmatterTags = metadata.frontmatterTags ?? [];
+    const aliases = metadata.aliases ?? [];
+    const frontmatter = metadata.frontmatter ?? {};
+    const frontmatterKeys = metadata.frontmatterKeys ?? [];
+
+    await table.update({
+      where: pathWhere(path),
+      values: {
+        mtime: metadata.mtime ?? 0,
+        size: metadata.size ?? 0,
+        content_hash: metadata.contentHash ?? "",
+        frontmatter_hash: metadata.frontmatterHash ?? "",
+        tags_json: JSON.stringify(tags),
+        tags_text: listText(tags),
+        inline_tags_json: JSON.stringify(inlineTags),
+        frontmatter_tags_json: JSON.stringify(frontmatterTags),
+        aliases_json: JSON.stringify(aliases),
+        aliases_text: listText(aliases),
+        frontmatter_json: JSON.stringify(frontmatter),
+        frontmatter_keys_json: JSON.stringify(frontmatterKeys),
+        frontmatter_keys_text: listText(frontmatterKeys),
+        title: metadata.title ?? "",
+        status: metadata.status ?? "",
+        project: metadata.project ?? "",
+        type: metadata.type ?? "",
+        indexed_at: metadata.indexedAt ?? new Date().toISOString()
+      }
+    });
+  }
+
+  async renamePath(oldPath: string, newPath: string, basename: string, folder: string): Promise<void> {
+    const table = await this.getTable();
+    if (!table) return;
+    await table.update({
+      where: pathWhere(oldPath),
+      values: {
+        path: newPath,
+        basename,
+        folder
+      }
+    });
+  }
+
+  async removeMissingPaths(existingPaths: Set<string>): Promise<number> {
+    const indexed = await this.paths();
     let removed = 0;
-    for (const [id, record] of this.records.entries()) {
-      if (!existingPaths.has(record.path)) {
-        this.records.delete(id);
+    for (const path of indexed) {
+      if (!existingPaths.has(path)) {
+        await this.deletePath(path);
         removed++;
       }
     }
     return removed;
   }
-}
 
-export function cosineSimilarity(a: number[], b: number[]): number {
-  let dot = 0;
-  let aMag = 0;
-  let bMag = 0;
-  const length = Math.min(a.length, b.length);
-  for (let i = 0; i < length; i++) {
-    dot += a[i] * b[i];
-    aMag += a[i] * a[i];
-    bMag += b[i] * b[i];
+  async search(vector: number[], options: SearchOptions = {}): Promise<SearchResult[]> {
+    const table = await this.getTable();
+    if (!table) return [];
+
+    const limit = Math.max(1, options.limit ?? 10);
+    let query = table.vectorSearch(vector).distanceType("cosine").limit(limit);
+    const where = buildWhere(options);
+    if (where) query = query.where(where);
+
+    const rows = await query.select([
+      "id",
+      "path",
+      "folder",
+      "basename",
+      "mtime",
+      "size",
+      "position",
+      "text",
+      "tags_json",
+      "frontmatter_json",
+      "_distance"
+    ]).toArray();
+
+    return rows.map(fromRow);
   }
-  if (aMag === 0 || bMag === 0) return 0;
-  return dot / (Math.sqrt(aMag) * Math.sqrt(bMag));
+
+  private async ensureConnection(): Promise<Connection> {
+    if (this.connection) return this.connection;
+    if (!(await this.adapter.exists(this.dbPath))) {
+      await this.adapter.mkdir(this.dbPath);
+    }
+    this.connection = await lancedb.connect(this.dbPath);
+    return this.connection;
+  }
+
+  private async getTable(): Promise<Table | null> {
+    if (this.table) return this.table;
+    const connection = await this.ensureConnection();
+    const names = await connection.tableNames();
+    if (!names.includes(this.tableName)) return null;
+    this.table = await connection.openTable(this.tableName);
+    return this.table;
+  }
+
+  private async ensureTable(records: VectorRecord[]): Promise<Table> {
+    const existing = await this.getTable();
+    if (existing) return existing;
+    const connection = await this.ensureConnection();
+    this.table = await connection.createTable(this.tableName, records.map(toRow));
+    return this.table;
+  }
+
+  private async deletePath(path: string): Promise<void> {
+    const table = await this.getTable();
+    if (!table) return;
+    await table.delete(pathWhere(path));
+  }
 }

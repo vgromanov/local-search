@@ -57,14 +57,14 @@ export class LocalSmartLookupView extends ItemView {
     });
     searchButton.addEventListener("click", () => void this.runSearch());
     indexButton.addEventListener("click", () => void this.runIndex());
-    refreshButton.addEventListener("click", () => this.renderStatus());
+    refreshButton.addEventListener("click", () => void this.renderStatus());
 
-    this.renderStatus();
+    void this.renderStatus();
     this.renderEmpty("Type a question to search indexed notes by meaning.");
   }
 
-  private renderStatus(): void {
-    const status = this.plugin.indexer.status();
+  private async renderStatus(): Promise<void> {
+    const status = await this.plugin.indexer.status();
     this.statusEl.setText(`${status.indexedFiles} files, ${status.indexedChunks} chunks indexed${status.isIndexing ? " · indexing" : ""}`);
   }
 
@@ -77,7 +77,7 @@ export class LocalSmartLookupView extends ItemView {
     try {
       this.renderEmpty("Indexing markdown files...");
       await this.plugin.indexer.indexVault();
-      this.renderStatus();
+      await this.renderStatus();
       this.renderEmpty("Index ready. Ask a question to search.");
     } catch (error) {
       new Notice(`Indexing failed: ${error instanceof Error ? error.message : String(error)}`);

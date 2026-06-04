@@ -17,14 +17,33 @@ export interface LocalSmartLookupSettings {
 export interface VaultChunk {
   id: string;
   path: string;
+  folder: string;
   basename: string;
   mtime: number;
+  size: number;
   position: number;
   text: string;
 }
 
 export interface VectorRecord extends VaultChunk {
   vector: number[];
+  contentHash: string;
+  bodyHash: string;
+  frontmatterHash: string;
+  chunkingConfigHash: string;
+  embeddingModel: string;
+  embeddingDim: number;
+  indexedAt: string;
+  tags: string[];
+  inlineTags: string[];
+  frontmatterTags: string[];
+  aliases: string[];
+  frontmatter: Record<string, unknown>;
+  frontmatterKeys: string[];
+  title: string;
+  status: string;
+  project: string;
+  type: string;
 }
 
 export interface SearchOptions {
@@ -32,11 +51,17 @@ export interface SearchOptions {
   dataviewSource?: string;
   dataviewQuery?: string;
   allowedPaths?: Set<string>;
+  where?: string;
+  tags?: string[];
+  frontmatter?: Record<string, string | number | boolean>;
 }
 
 export interface SearchResult extends VaultChunk {
   score: number;
+  distance?: number;
   rerankScore?: number;
+  tags?: string[];
+  frontmatter?: Record<string, unknown>;
 }
 
 export interface DataviewApi {

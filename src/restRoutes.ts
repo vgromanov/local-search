@@ -30,8 +30,8 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
   if (!api) return;
 
   api.addRoute("/local-smart-lookup/status/")
-    .get?.((_req, res) => {
-      api.sendSuccess(res, plugin.indexer.status());
+    .get?.(async (_req, res) => {
+      api.sendSuccess(res, await plugin.indexer.status());
     });
 
   api.addRoute("/local-smart-lookup/search/")
@@ -42,7 +42,19 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
         const limit = typeof body.limit === "number" ? body.limit : undefined;
         const dataviewSource = typeof body.dataviewSource === "string" ? body.dataviewSource : undefined;
         const dataviewQuery = typeof body.dataviewQuery === "string" ? body.dataviewQuery : undefined;
-        const results = await plugin.searchService.search(query, { limit, dataviewSource, dataviewQuery });
+        const where = typeof body.where === "string" ? body.where : undefined;
+        const tags = Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === "string") : undefined;
+        const frontmatter = body.frontmatter && typeof body.frontmatter === "object" && !Array.isArray(body.frontmatter)
+          ? body.frontmatter as Record<string, string | number | boolean>
+          : undefined;
+        const results = await plugin.searchService.search(query, {
+          limit,
+          dataviewSource,
+          dataviewQuery,
+          where,
+          tags,
+          frontmatter
+        });
         api.sendSuccess(res, { results });
       } catch (error) {
         sendError(api, res, 500, error);
@@ -53,7 +65,7 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): void {
     .post?.(async (_req, res) => {
       try {
         await plugin.indexer.indexVault();
-        api.sendSuccess(res, plugin.indexer.status());
+        api.sendSuccess(res, await plugin.indexer.status());
       } catch (error) {
         sendError(api, res, 500, error);
       }
