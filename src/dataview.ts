@@ -22,11 +22,23 @@ function extractPaths(value: unknown, paths = new Set<string>()): Set<string> {
     value.forEach((item) => extractPaths(item, paths));
   } else if (value && typeof value === "object") {
     const objectValue = value as Record<string, unknown>;
+    if (objectValue.value) extractPaths(objectValue.value, paths);
     if (Array.isArray(objectValue.values)) extractPaths(objectValue.values, paths);
     if (Array.isArray(objectValue.rows)) extractPaths(objectValue.rows, paths);
     if (Array.isArray(objectValue.children)) extractPaths(objectValue.children, paths);
+    if (typeof objectValue.array === "function") {
+      extractPaths((objectValue.array as () => unknown[])(), paths);
+    }
   }
   return paths;
+}
+
+function assertSuccessfulQuery(result: unknown): void {
+  if (!result || typeof result !== "object") return;
+  const queryResult = result as { successful?: boolean; error?: string };
+  if (queryResult.successful === false) {
+    throw new Error(queryResult.error || "Dataview query failed.");
+  }
 }
 
 export class DataviewFilter {
@@ -43,6 +55,7 @@ export class DataviewFilter {
 
     if (query?.trim() && api.query) {
       const result = await api.query(query.trim());
+      assertSuccessfulQuery(result);
       return extractPaths(result);
     }
 

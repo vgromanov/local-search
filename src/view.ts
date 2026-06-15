@@ -16,6 +16,10 @@ function formatScore(result: SearchResult): string {
   return `score ${(result.rerankScore ?? result.score).toFixed(3)}`;
 }
 
+function isDataviewQuery(value: string): boolean {
+  return /^(LIST|TABLE|TASK|CALENDAR)\b/i.test(value.trim());
+}
+
 export class LocalSmartLookupView extends ItemView {
   private queryInput!: HTMLInputElement;
   private dataviewInput!: HTMLInputElement;
@@ -57,7 +61,7 @@ export class LocalSmartLookupView extends ItemView {
     const filterRow = root.createDiv({ cls: "local-smart-lookup-filter-row" });
     this.dataviewInput = filterRow.createEl("input", {
       type: "text",
-      placeholder: "Dataview source filter"
+      placeholder: "Dataview source or query"
     });
     this.dataviewInput.value = this.plugin.settings.defaultDataviewSource;
 
@@ -109,8 +113,10 @@ export class LocalSmartLookupView extends ItemView {
 
     try {
       this.renderEmpty("Searching...");
+      const dataviewFilter = this.dataviewInput.value.trim();
       const results = await this.plugin.searchService.search(query, {
-        dataviewSource: this.dataviewInput.value.trim()
+        dataviewSource: dataviewFilter && !isDataviewQuery(dataviewFilter) ? dataviewFilter : undefined,
+        dataviewQuery: isDataviewQuery(dataviewFilter) ? dataviewFilter : undefined
       });
       this.renderResults(results);
     } catch (error) {

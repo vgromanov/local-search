@@ -204,9 +204,13 @@ function buildWhere(options: SearchOptions): string | undefined {
     clauses.push(`(${options.where.trim()})`);
   }
 
-  if (options.allowedPaths && options.allowedPaths.size > 0) {
-    const paths = Array.from(options.allowedPaths).map((path) => `'${escapeSql(path)}'`);
-    clauses.push(`path IN (${paths.join(", ")})`);
+  if (options.allowedPaths) {
+    if (options.allowedPaths.size === 0) {
+      clauses.push("path = '__local_smart_lookup_no_match__'");
+    } else {
+      const paths = Array.from(options.allowedPaths).map((path) => `'${escapeSql(path)}'`);
+      clauses.push(`path IN (${paths.join(", ")})`);
+    }
   }
 
   for (const tag of options.tags ?? []) {
