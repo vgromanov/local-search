@@ -2,19 +2,35 @@ import type { DataAdapter, Plugin } from "obsidian";
 import { normalizePath } from "obsidian";
 import type { SearchOptions, SearchResult, VectorRecord } from "./types";
 
+type FtsOptions = {
+  lowercase?: boolean;
+  stem?: boolean;
+  removeStopWords?: boolean;
+  asciiFolding?: boolean;
+};
+
 type LanceDbModule = {
   connect: (uri: string) => Promise<Connection>;
+  Index: {
+    fts: (options?: FtsOptions) => unknown;
+  };
 };
 
 type Query = {
   where: (predicate: string) => Query;
   select: (columns: string[]) => Query;
   limit: (limit: number) => Query;
+  fullTextSearch: (query: string, options?: { columns?: string[] }) => Query;
   toArray: () => Promise<Record<string, unknown>[]>;
 };
 
 type VectorQuery = Query & {
   distanceType: (distanceType: "cosine") => VectorQuery;
+};
+
+type IndexConfig = {
+  name: string;
+  columns?: string[];
 };
 
 type Table = {
@@ -25,6 +41,9 @@ type Table = {
   countRows: (filter?: string) => Promise<number>;
   query: () => Query;
   vectorSearch: (vector: number[]) => VectorQuery;
+  createIndex: (column: string, options?: { config?: unknown; replace?: boolean }) => Promise<void>;
+  listIndices: () => Promise<IndexConfig[]>;
+  optimize: () => Promise<unknown>;
 };
 
 type Connection = {
@@ -143,6 +162,7 @@ function parseJson<T>(value: unknown, fallback: T): T {
 
 function fromRow(row: Record<string, unknown>): SearchResult {
   const distance = typeof row._distance === "number" ? row._distance : undefined;
+  const ftsScore = typeof row._score === "number" ? row._score : undefined;
   return {
     id: String(row.id ?? ""),
     path: String(row.path ?? ""),
@@ -154,10 +174,24 @@ function fromRow(row: Record<string, unknown>): SearchResult {
     text: String(row.text ?? ""),
     distance,
     score: distance === undefined ? 0 : 1 / (1 + distance),
+    ftsScore,
     tags: parseJson<string[]>(row.tags_json, []),
     frontmatter: parseJson<Record<string, unknown>>(row.frontmatter_json, {})
   };
 }
+
+const SEARCH_COLUMNS = [
+  "id",
+  "path",
+  "folder",
+  "basename",
+  "mtime",
+  "size",
+  "position",
+  "text",
+  "tags_json",
+  "frontmatter_json"
+];
 
 function pathWhere(path: string): string {
   return `path = '${escapeSql(path)}'`;
@@ -199,6 +233,8 @@ export class LanceVectorStore {
   private dbPath: string;
   private pluginDir: string;
   private tableName = "chunks";
+  private lexicalColumn = "text";
+  private lexicalIndexReady = false;
 
   constructor(private plugin: Plugin, private adapter: DataAdapter) {
     this.pluginDir = normalizePath(plugin.manifest.dir ?? ".obsidian/plugins/local-smart-lookup");
@@ -352,21 +388,71 @@ export class LanceVectorStore {
     const where = buildWhere(options);
     if (where) query = query.where(where);
 
-    const rows = await query.select([
-      "id",
-      "path",
-      "folder",
-      "basename",
-      "mtime",
-      "size",
-      "position",
-      "text",
-      "tags_json",
-      "frontmatter_json",
-      "_distance"
-    ]).toArray();
-
+    const rows = await query.select([...SEARCH_COLUMNS, "_distance"]).toArray();
     return rows.map(fromRow);
+  }
+
+  async searchLexical(text: string, options: SearchOptions = {}): Promise<SearchResult[]> {
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+    const table = await this.getTable();
+    if (!table) return [];
+    if (!(await this.ensureLexicalIndex())) return [];
+
+    const limit = Math.max(1, options.limit ?? 10);
+    try {
+      let query = table.query().fullTextSearch(trimmed, { columns: [this.lexicalColumn] });
+      const where = buildWhere(options);
+      if (where) query = query.where(where);
+      const rows = await query.limit(limit).select([...SEARCH_COLUMNS, "_score"]).toArray();
+      return rows.map(fromRow);
+    } catch (error) {
+      console.error("Local Smart Lookup lexical search failed", error);
+      return [];
+    }
+  }
+
+  async ensureLexicalIndex(rebuild = false): Promise<boolean> {
+    if (this.lexicalIndexReady && !rebuild) return true;
+    const table = await this.getTable();
+    if (!table) return false;
+
+    try {
+      if (!rebuild) {
+        const indices = await table.listIndices();
+        const hasFts = indices.some((index) => (index.columns ?? []).includes(this.lexicalColumn));
+        if (hasFts) {
+          this.lexicalIndexReady = true;
+          return true;
+        }
+      }
+
+      const lancedb = this.loadLanceDb();
+      await table.createIndex(this.lexicalColumn, {
+        config: lancedb.Index.fts({
+          lowercase: true,
+          stem: true,
+          removeStopWords: true,
+          asciiFolding: true
+        }),
+        replace: true
+      });
+      this.lexicalIndexReady = true;
+      return true;
+    } catch (error) {
+      console.error("Local Smart Lookup failed to build lexical index", error);
+      return false;
+    }
+  }
+
+  async optimize(): Promise<void> {
+    const table = await this.getTable();
+    if (!table) return;
+    try {
+      await table.optimize();
+    } catch (error) {
+      console.error("Local Smart Lookup optimize failed", error);
+    }
   }
 
   private async ensureConnection(): Promise<Connection> {

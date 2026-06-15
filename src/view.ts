@@ -4,6 +4,18 @@ import type LocalSmartLookupPlugin from "./main";
 
 export const VIEW_TYPE_LOCAL_SMART_LOOKUP = "local-smart-lookup-view";
 
+function formatScore(result: SearchResult): string {
+  if (typeof result.fusedScore === "number") {
+    const parts: string[] = [];
+    if (typeof result.rerankScore === "number") parts.push(`r${result.rerankScore.toFixed(2)}`);
+    if (typeof result.vectorRank === "number") parts.push(`v#${result.vectorRank}`);
+    if (typeof result.lexicalRank === "number") parts.push(`bm25#${result.lexicalRank}`);
+    const detail = parts.length ? ` (${parts.join(" ")})` : "";
+    return `rrf ${result.fusedScore.toFixed(4)}${detail}`;
+  }
+  return `score ${(result.rerankScore ?? result.score).toFixed(3)}`;
+}
+
 export class LocalSmartLookupView extends ItemView {
   private queryInput!: HTMLInputElement;
   private dataviewInput!: HTMLInputElement;
@@ -121,7 +133,7 @@ export class LocalSmartLookupView extends ItemView {
       button.addEventListener("click", () => void this.plugin.searchService.openResult(result));
       title.createSpan({
         cls: "local-smart-lookup-score",
-        text: `score ${(result.rerankScore ?? result.score).toFixed(3)}`
+        text: formatScore(result)
       });
       item.createDiv({
         cls: "local-smart-lookup-excerpt",

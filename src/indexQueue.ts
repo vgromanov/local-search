@@ -159,7 +159,14 @@ export class PersistentIndexQueue {
       this.stats.isProcessing = false;
       this.updateQueuedCount();
       await this.save();
-      if (!this.stopped && this.items.size > 0) this.schedule(10_000);
+      if (!this.stopped && this.items.size > 0) {
+        this.schedule(10_000);
+      } else if (!this.stopped) {
+        // Queue drained: fold new fragments into vector + FTS indexes and make
+        // sure the lexical index exists so BM25 retrieval stays current.
+        await this.store.optimize();
+        await this.store.ensureLexicalIndex();
+      }
     }
   }
 

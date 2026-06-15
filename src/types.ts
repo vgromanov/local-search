@@ -12,6 +12,13 @@ export interface LocalSmartLookupSettings {
   chunkOverlap: number;
   defaultLimit: number;
   defaultDataviewSource: string;
+  useLexical: boolean;
+  candidateMultiplier: number;
+  rerankPoolSize: number;
+  rrfK: number;
+  rrfWeightRerank: number;
+  rrfWeightVector: number;
+  rrfWeightLexical: number;
 }
 
 export interface VaultChunk {
@@ -60,6 +67,11 @@ export interface SearchResult extends VaultChunk {
   score: number;
   distance?: number;
   rerankScore?: number;
+  ftsScore?: number;
+  fusedScore?: number;
+  vectorRank?: number;
+  lexicalRank?: number;
+  rerankRank?: number;
   tags?: string[];
   frontmatter?: Record<string, unknown>;
 }

@@ -13,8 +13,20 @@ export const DEFAULT_SETTINGS: LocalSmartLookupSettings = {
   chunkSize: 1200,
   chunkOverlap: 180,
   defaultLimit: 10,
-  defaultDataviewSource: ""
+  defaultDataviewSource: "",
+  useLexical: true,
+  candidateMultiplier: 4,
+  rerankPoolSize: 50,
+  rrfK: 60,
+  rrfWeightRerank: 1,
+  rrfWeightVector: 0.6,
+  rrfWeightLexical: 0.4
 };
+
+function numberSetting(value: string, fallback: number, min: number): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? Math.max(min, parsed) : fallback;
+}
 
 export class LocalSmartLookupSettingTab extends PluginSettingTab {
   plugin: LocalSmartLookupPlugin;
@@ -96,6 +108,74 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.rerankModel)
         .onChange(async (value) => {
           this.plugin.settings.rerankModel = value.trim();
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Lexical (BM25) fusion")
+      .setDesc("Add a full-text BM25 retrieval leg and fuse it with vector + rerank via Reciprocal Rank Fusion. Recovers exact-term matches and breaks reranker score ties.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.useLexical)
+        .onChange(async (value) => {
+          this.plugin.settings.useLexical = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("RRF k")
+      .setDesc("Reciprocal Rank Fusion constant. Higher flattens the contribution of top ranks.")
+      .addText((text) => text
+        .setPlaceholder("60")
+        .setValue(String(this.plugin.settings.rrfK))
+        .onChange(async (value) => {
+          this.plugin.settings.rrfK = numberSetting(value, DEFAULT_SETTINGS.rrfK, 1);
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("RRF weights (rerank / vector / lexical)")
+      .setDesc("Relative authority of each ranked leg in the fusion.")
+      .addText((text) => text
+        .setPlaceholder("1")
+        .setValue(String(this.plugin.settings.rrfWeightRerank))
+        .onChange(async (value) => {
+          this.plugin.settings.rrfWeightRerank = numberSetting(value, DEFAULT_SETTINGS.rrfWeightRerank, 0);
+          await this.plugin.saveSettings();
+        }))
+      .addText((text) => text
+        .setPlaceholder("0.6")
+        .setValue(String(this.plugin.settings.rrfWeightVector))
+        .onChange(async (value) => {
+          this.plugin.settings.rrfWeightVector = numberSetting(value, DEFAULT_SETTINGS.rrfWeightVector, 0);
+          await this.plugin.saveSettings();
+        }))
+      .addText((text) => text
+        .setPlaceholder("0.4")
+        .setValue(String(this.plugin.settings.rrfWeightLexical))
+        .onChange(async (value) => {
+          this.plugin.settings.rrfWeightLexical = numberSetting(value, DEFAULT_SETTINGS.rrfWeightLexical, 0);
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Candidate multiplier")
+      .setDesc("Per-leg over-fetch factor before fusion (limit x multiplier).")
+      .addText((text) => text
+        .setPlaceholder("4")
+        .setValue(String(this.plugin.settings.candidateMultiplier))
+        .onChange(async (value) => {
+          this.plugin.settings.candidateMultiplier = Math.round(numberSetting(value, DEFAULT_SETTINGS.candidateMultiplier, 1));
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Rerank pool size")
+      .setDesc("Maximum merged candidates sent to the cross-encoder per search.")
+      .addText((text) => text
+        .setPlaceholder("50")
+        .setValue(String(this.plugin.settings.rerankPoolSize))
+        .onChange(async (value) => {
+          this.plugin.settings.rerankPoolSize = Math.round(numberSetting(value, DEFAULT_SETTINGS.rerankPoolSize, 1));
           await this.plugin.saveSettings();
         }));
 

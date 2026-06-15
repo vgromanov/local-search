@@ -53,6 +53,19 @@ export default class LocalSmartLookupPlugin extends Plugin {
       callback: () => void this.indexQueue.enqueueVault()
     });
 
+    this.addCommand({
+      id: "rebuild-lexical-index-local-smart-lookup",
+      name: "Rebuild lexical (BM25) index",
+      callback: () => {
+        new Notice("Local Smart Lookup: rebuilding lexical index...");
+        void this.vectorStore.ensureLexicalIndex(true).then((ok) => {
+          new Notice(ok
+            ? "Local Smart Lookup: lexical index ready."
+            : "Local Smart Lookup: lexical index build failed (see console).");
+        });
+      }
+    });
+
     this.registerEvent(this.app.vault.on("modify", (file) => {
       if (file instanceof TFile && file.extension === "md") {
         void this.indexQueue.enqueuePath(file.path);
