@@ -1,5 +1,12 @@
 import type { DataAdapter, Plugin } from "obsidian";
 import { normalizePath } from "obsidian";
+import {
+  INDEX_METRIC,
+  QUERYABLE_FIELDS,
+  SCALAR_FILTER_COLUMNS,
+  SCHEMA_VER,
+  type IndexMeta
+} from "./schema";
 import type { SearchOptions, SearchResult, VectorRecord } from "./types";
 
 type FtsOptions = {
@@ -51,6 +58,7 @@ type Connection = {
   tableNames: () => Promise<string[]>;
   openTable: (name: string) => Promise<Table>;
   createTable: (name: string, data: Record<string, unknown>[]) => Promise<Table>;
+  dropTable: (name: string) => Promise<void>;
 };
 
 type LanceChunkRow = Omit<VectorRecord,
@@ -132,6 +140,12 @@ function toRow(record: VectorRecord): LanceChunkRow {
     status: record.status,
     project: record.project,
     type: record.type,
+    uuid: record.uuid,
+    workspace: record.workspace,
+    date_bucket: record.date_bucket,
+    signal_kind: record.signal_kind,
+    workflow_id: record.workflow_id,
+    schema_ver: record.schema_ver,
     content_hash: record.contentHash,
     body_hash: record.bodyHash,
     frontmatter_hash: record.frontmatterHash,
@@ -176,7 +190,17 @@ function fromRow(row: Record<string, unknown>): SearchResult {
     score: distance === undefined ? 0 : 1 / (1 + distance),
     ftsScore,
     tags: parseJson<string[]>(row.tags_json, []),
-    frontmatter: parseJson<Record<string, unknown>>(row.frontmatter_json, {})
+    frontmatter: parseJson<Record<string, unknown>>(row.frontmatter_json, {}),
+    title: String(row.title ?? ""),
+    status: String(row.status ?? ""),
+    project: String(row.project ?? ""),
+    type: String(row.type ?? ""),
+    uuid: String(row.uuid ?? ""),
+    workspace: String(row.workspace ?? ""),
+    date_bucket: String(row.date_bucket ?? ""),
+    signal_kind: String(row.signal_kind ?? ""),
+    workflow_id: String(row.workflow_id ?? ""),
+    schema_ver: String(row.schema_ver ?? "")
   };
 }
 
@@ -190,7 +214,17 @@ const SEARCH_COLUMNS = [
   "position",
   "text",
   "tags_json",
-  "frontmatter_json"
+  "frontmatter_json",
+  "title",
+  "status",
+  "project",
+  "type",
+  "uuid",
+  "workspace",
+  "date_bucket",
+  "signal_kind",
+  "workflow_id",
+  "schema_ver"
 ];
 
 function pathWhere(path: string): string {
@@ -219,8 +253,9 @@ function buildWhere(options: SearchOptions): string | undefined {
   }
 
   for (const [key, value] of Object.entries(options.frontmatter ?? {})) {
-    if (["status", "project", "type", "title"].includes(key)) {
-      clauses.push(`${key} = '${escapeSql(String(value))}'`);
+    const column = QUERYABLE_FIELDS[key] ?? key;
+    if ((SCALAR_FILTER_COLUMNS as readonly string[]).includes(column)) {
+      clauses.push(`${column} = '${escapeSql(String(value))}'`);
       continue;
     }
     const jsonNeedle = `"${key}":${JSON.stringify(value)}`;
@@ -235,18 +270,29 @@ export class LanceVectorStore {
   private table: Table | null = null;
   private lancedb: LanceDbModule | null = null;
   private dbPath: string;
+  private metaPath: string;
   private pluginDir: string;
   private tableName = "chunks";
   private lexicalColumn = "text";
   private lexicalIndexReady = false;
+  private didResetSchema = false;
 
   constructor(private plugin: Plugin, private adapter: DataAdapter) {
     this.pluginDir = normalizePath(plugin.manifest.dir ?? ".obsidian/plugins/local-smart-lookup");
     this.dbPath = normalizePath(`${this.pluginDir}/lancedb`);
+    this.metaPath = normalizePath(`${this.pluginDir}/index-meta.json`);
+  }
+
+  /** True if load() dropped the chunks table due to schema_ver mismatch. */
+  consumedSchemaReset(): boolean {
+    const value = this.didResetSchema;
+    this.didResetSchema = false;
+    return value;
   }
 
   async load(): Promise<void> {
     await this.ensureConnection();
+    await this.ensureSchemaCurrent();
   }
 
   close(): void {
@@ -254,6 +300,38 @@ export class LanceVectorStore {
     this.connection?.close();
     this.table = null;
     this.connection = null;
+  }
+
+  async readIndexMeta(): Promise<IndexMeta | null> {
+    if (!(await this.adapter.exists(this.metaPath))) return null;
+    try {
+      const raw = JSON.parse(await this.adapter.read(this.metaPath)) as Partial<IndexMeta>;
+      if (!raw || typeof raw !== "object") return null;
+      return {
+        schema_ver: String(raw.schema_ver ?? ""),
+        metric: INDEX_METRIC,
+        built_at: String(raw.built_at ?? ""),
+        embedding_model: String(raw.embedding_model ?? ""),
+        embedding_dim: Number(raw.embedding_dim ?? 0)
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async writeIndexMeta(meta: IndexMeta): Promise<void> {
+    await this.adapter.write(this.metaPath, JSON.stringify(meta, null, 2));
+  }
+
+  async sampleIndexedEmbedding(): Promise<{ embeddingModel: string; embeddingDim: number } | null> {
+    const table = await this.getTable();
+    if (!table) return null;
+    const rows = await table.query().select(["embedding_model", "embedding_dim"]).limit(1).toArray();
+    if (rows.length === 0) return null;
+    return {
+      embeddingModel: String(rows[0].embedding_model ?? ""),
+      embeddingDim: Number(rows[0].embedding_dim ?? 0)
+    };
   }
 
   async count(): Promise<number> {
@@ -353,6 +431,12 @@ export class LanceVectorStore {
         status: metadata.status ?? "",
         project: metadata.project ?? "",
         type: metadata.type ?? "",
+        uuid: metadata.uuid ?? "",
+        workspace: metadata.workspace ?? "",
+        date_bucket: metadata.date_bucket ?? "",
+        signal_kind: metadata.signal_kind ?? "",
+        workflow_id: metadata.workflow_id ?? "",
+        schema_ver: metadata.schema_ver ?? SCHEMA_VER,
         indexed_at: metadata.indexedAt ?? new Date().toISOString()
       }
     });
@@ -456,6 +540,41 @@ export class LanceVectorStore {
       await table.optimize();
     } catch (error) {
       console.error("Local Smart Lookup optimize failed", error);
+    }
+  }
+
+  private async ensureSchemaCurrent(): Promise<void> {
+    const table = await this.getTable();
+    if (!table) return;
+
+    let onDiskVer = "";
+    try {
+      const rows = await table.query().select(["schema_ver"]).limit(1).toArray();
+      onDiskVer = String(rows[0]?.schema_ver ?? "");
+    } catch {
+      onDiskVer = "";
+    }
+
+    if (onDiskVer === SCHEMA_VER) return;
+
+    console.info(
+      `Local Smart Lookup: schema_ver "${onDiskVer || "(missing)"}" != "${SCHEMA_VER}"; dropping chunks table for recreate.`
+    );
+    await this.dropChunksTable();
+    this.didResetSchema = true;
+  }
+
+  private async dropChunksTable(): Promise<void> {
+    this.table?.close();
+    this.table = null;
+    this.lexicalIndexReady = false;
+    const connection = await this.ensureConnection();
+    const names = await connection.tableNames();
+    if (names.includes(this.tableName)) {
+      await connection.dropTable(this.tableName);
+    }
+    if (await this.adapter.exists(this.metaPath)) {
+      await this.adapter.remove(this.metaPath);
     }
   }
 

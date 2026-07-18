@@ -51,6 +51,14 @@ export interface VectorRecord extends VaultChunk {
   status: string;
   project: string;
   type: string;
+  /** Note/session id from frontmatter.uuid ?? session_uuid (not chunk id). */
+  uuid: string;
+  workspace: string;
+  /** YYYY-MM-DD from frontmatter.date or Daily/ path; "" if absent. */
+  date_bucket: string;
+  signal_kind: string;
+  workflow_id: string;
+  schema_ver: string;
 }
 
 export interface SearchOptions {
@@ -74,6 +82,16 @@ export interface SearchResult extends VaultChunk {
   rerankRank?: number;
   tags?: string[];
   frontmatter?: Record<string, unknown>;
+  title?: string;
+  status?: string;
+  project?: string;
+  type?: string;
+  uuid?: string;
+  workspace?: string;
+  date_bucket?: string;
+  signal_kind?: string;
+  workflow_id?: string;
+  schema_ver?: string;
 }
 
 export interface DataviewApi {

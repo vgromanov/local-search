@@ -58,8 +58,21 @@ Each chunk row stores:
 - note path, folder, basename, mtime, and size
 - full content hash, body hash, frontmatter hash, chunking config hash
 - embedding model and embedding dimension
-- frontmatter JSON plus common scalar fields: `title`, `status`, `project`, `type`
+- frontmatter JSON plus common scalar fields: `title`, `status`, `project`, `type`,
+  `uuid`, `workspace`, `date_bucket`, `signal_kind`, `workflow_id`, `schema_ver`
 - frontmatter tags and inline tags
+
+**Id vs uuid:** chunk primary key is `id` (`path#bodyHash#position`). Note/session
+id is `uuid`, projected from `frontmatter.uuid` or `frontmatter.session_uuid`.
+Absent scalars are empty string `""` (never null).
+
+**date_bucket:** `YYYY-MM-DD` from `frontmatter.date` (string-sliced, TZ-safe), else
+from a `Daily/YYYY-MM-DD` path prefix, else `""`.
+
+**schema_ver:** currently `3`. Bump when projected columns or their semantics change;
+on load, a mismatch drops and recreates the LanceDB table (then the plugin queues a
+full reindex). Regime stamp also lives in `index-meta.json` beside the DB
+(`schema_ver`, `metric`, `built_at`, `embedding_model`, `embedding_dim`).
 
 This lets the plugin make predictable reindex decisions:
 
