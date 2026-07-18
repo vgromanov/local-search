@@ -166,6 +166,7 @@ export class PersistentIndexQueue {
         // sure the lexical index exists so BM25 retrieval stays current.
         await this.store.optimize();
         await this.store.ensureLexicalIndex();
+        await this.indexer.persistIndexMeta();
       }
     }
   }

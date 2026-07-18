@@ -2,6 +2,12 @@ import { createHash } from "crypto";
 import { Notice, TFile } from "obsidian";
 import type { App, CachedMetadata } from "obsidian";
 import { LocalModelClient } from "./modelClient";
+import {
+  INDEX_METRIC,
+  SCHEMA_VER,
+  resolveDateBucket,
+  resolveNoteUuid
+} from "./schema";
 import type { LocalSmartLookupSettings, VaultChunk, VectorRecord } from "./types";
 import type { IndexDecision } from "./vectorStore";
 import { LanceVectorStore } from "./vectorStore";
@@ -167,14 +173,19 @@ export class VaultIndexer {
       stats.removed = await this.store.removeMissingPaths(existingPaths);
 
       for (const file of files) {
-        const decision = await this.indexFile(file);
-        stats.scanned++;
-        if (decision === "unchanged") stats.unchanged++;
-        if (decision === "metadata-only") stats.metadataOnly++;
-        if (decision === "missing" || decision === "content-changed" || decision === "config-changed") stats.embedded++;
+        try {
+          const decision = await this.indexFile(file);
+          stats.scanned++;
+          if (decision === "unchanged") stats.unchanged++;
+          if (decision === "metadata-only") stats.metadataOnly++;
+          if (decision === "missing" || decision === "content-changed" || decision === "config-changed") stats.embedded++;
+        } catch (error) {
+          console.error(`Local Smart Lookup failed to index ${file.path}`, error);
+        }
       }
       this.lastStats = stats;
       this.lastIndexedAt = new Date().toISOString();
+      await this.persistIndexMeta();
       new Notice(`Local Smart Lookup indexed ${stats.embedded} files, skipped ${stats.unchanged}.`);
       return stats;
     } finally {
@@ -253,7 +264,13 @@ export class VaultIndexer {
       title: valueAsString(frontmatter.title),
       status: valueAsString(frontmatter.status),
       project: valueAsString(frontmatter.project),
-      type: valueAsString(frontmatter.type)
+      type: valueAsString(frontmatter.type),
+      uuid: resolveNoteUuid(frontmatter),
+      workspace: valueAsString(frontmatter.workspace),
+      date_bucket: resolveDateBucket(frontmatter.date, file.path),
+      signal_kind: valueAsString(frontmatter.signal_kind),
+      workflow_id: valueAsString(frontmatter.workflow_id),
+      schema_ver: SCHEMA_VER
     };
 
     return {
@@ -266,5 +283,17 @@ export class VaultIndexer {
       embeddingModel: settings.embeddingModel,
       metadata
     };
+  }
+
+  async persistIndexMeta(): Promise<void> {
+    const sample = await this.store.sampleIndexedEmbedding();
+    const settings = this.getSettings();
+    await this.store.writeIndexMeta({
+      schema_ver: SCHEMA_VER,
+      metric: INDEX_METRIC,
+      built_at: this.lastIndexedAt || new Date().toISOString(),
+      embedding_model: sample?.embeddingModel || settings.embeddingModel,
+      embedding_dim: sample?.embeddingDim ?? 0
+    });
   }
 }

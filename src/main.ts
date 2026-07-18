@@ -32,6 +32,11 @@ export default class LocalSmartLookupPlugin extends Plugin {
     await this.indexQueue.load();
     this.searchService = new SearchService(this.app, this.vectorStore, this.modelClient, this.dataviewFilter, () => this.settings);
 
+    if (this.vectorStore.consumedSchemaReset()) {
+      new Notice("Local Smart Lookup: index schema upgraded — reindexing vault.");
+      await this.indexQueue.enqueueVault();
+    }
+
     this.registerView(
       VIEW_TYPE_LOCAL_SMART_LOOKUP,
       (leaf) => new LocalSmartLookupView(leaf, this)
