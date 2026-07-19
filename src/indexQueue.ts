@@ -1,9 +1,9 @@
 import { Notice, TFile } from "obsidian";
 import type { App, DataAdapter, Plugin } from "obsidian";
 import { normalizePath } from "obsidian";
-import type { IndexDecision } from "./vectorStore";
+import type { CompactResult, IndexDecision, LanceVectorStore } from "./vectorStore";
+import { formatBytes } from "./vectorStore";
 import type { VaultIndexer } from "./indexer";
-import type { LanceVectorStore } from "./vectorStore";
 
 type QueueItem = {
   path: string;
@@ -54,6 +54,7 @@ export class PersistentIndexQueue {
   private timer: number | null = null;
   private stopped = false;
   private stats: QueueStats = emptyStats();
+  private maintenanceRunning = false;
 
   constructor(
     private app: App,
@@ -77,8 +78,8 @@ export class PersistentIndexQueue {
     this.stopped = true;
     if (this.timer !== null) {
       window.clearTimeout(this.timer);
-      this.timer = null;
     }
+    this.timer = null;
   }
 
   status(): QueueStats {
@@ -104,8 +105,57 @@ export class PersistentIndexQueue {
     new Notice(`Local Smart Lookup queued ${files.length} markdown files.`);
   }
 
+  /**
+   * In-place LanceDB reclaim. Requires idle queue (no items / not processing).
+   */
+  async compactNow(): Promise<CompactResult> {
+    this.assertIdleForMaintenance("compact");
+    this.maintenanceRunning = true;
+    try {
+      new Notice("Local Smart Lookup: compacting index (search may slow)...");
+      const result = await this.store.compactUntilStable(3);
+      await this.indexer.persistIndexMeta();
+      new Notice(
+        `Local Smart Lookup: compact done — ${formatBytes(result.beforeBytes)} → ${formatBytes(result.afterBytes)} (${result.passes} pass${result.passes === 1 ? "" : "es"}).`
+      );
+      return result;
+    } finally {
+      this.maintenanceRunning = false;
+    }
+  }
+
+  /**
+   * Wipe on-disk LanceDB and re-enqueue full vault reindex. Hours of downtime possible.
+   */
+  async wipeAndReindex(): Promise<void> {
+    this.assertIdleForMaintenance("wipe");
+    this.maintenanceRunning = true;
+    try {
+      if (this.timer !== null) {
+        window.clearTimeout(this.timer);
+        this.timer = null;
+      }
+      this.items.clear();
+      await this.save();
+      new Notice("Local Smart Lookup: wiping index...");
+      await this.store.wipeIndex();
+      // Populate queue while maintenance blocks schedule(); arm timer in finally.
+      const files = this.app.vault.getMarkdownFiles();
+      for (const file of files) {
+        this.setQueuedPath(file.path);
+      }
+      await this.save();
+      new Notice(`Local Smart Lookup: wipe complete — queued ${files.length} files for reindex.`);
+    } finally {
+      this.maintenanceRunning = false;
+      if (!this.stopped && this.items.size > 0) {
+        this.schedule(0);
+      }
+    }
+  }
+
   schedule(delayMs = 750): void {
-    if (this.stopped || this.stats.isProcessing) return;
+    if (this.stopped || this.stats.isProcessing || this.maintenanceRunning) return;
     if (this.timer !== null) window.clearTimeout(this.timer);
     this.timer = window.setTimeout(() => {
       this.timer = null;
@@ -113,8 +163,19 @@ export class PersistentIndexQueue {
     }, delayMs);
   }
 
+  private assertIdleForMaintenance(action: string): void {
+    if (this.maintenanceRunning) {
+      throw new Error(`Another index maintenance task is already running.`);
+    }
+    if (this.stats.isProcessing || this.items.size > 0) {
+      throw new Error(
+        `Cannot ${action} while the index queue is busy (${this.items.size} queued). Wait until it drains.`
+      );
+    }
+  }
+
   private async process(): Promise<void> {
-    if (this.stopped || this.stats.isProcessing) return;
+    if (this.stopped || this.stats.isProcessing || this.maintenanceRunning) return;
     this.stats.isProcessing = true;
 
     try {
@@ -161,9 +222,9 @@ export class PersistentIndexQueue {
       await this.save();
       if (!this.stopped && this.items.size > 0) {
         this.schedule(10_000);
-      } else if (!this.stopped) {
-        // Queue drained: fold new fragments into vector + FTS indexes and make
-        // sure the lexical index exists so BM25 retrieval stays current.
+      } else if (!this.stopped && !this.maintenanceRunning) {
+        // Queue drained: fold new fragments into vector + FTS indexes and prune
+        // old Lance versions so disk usage stays bounded.
         await this.store.optimize();
         await this.store.ensureLexicalIndex();
         await this.indexer.persistIndexMeta();

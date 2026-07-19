@@ -1,6 +1,7 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
 import type LocalSmartLookupPlugin from "./main";
 import type { LocalSmartLookupSettings } from "./types";
+import { formatBytes } from "./vectorStore";
 
 export const DEFAULT_SETTINGS: LocalSmartLookupSettings = {
   embeddingBaseUrl: "http://127.0.0.1:11434",
@@ -26,6 +27,32 @@ export const DEFAULT_SETTINGS: LocalSmartLookupSettings = {
 function numberSetting(value: string, fallback: number, min: number): number {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? Math.max(min, parsed) : fallback;
+}
+
+export class ConfirmModal extends Modal {
+  constructor(
+    app: App,
+    private heading: string,
+    private body: string,
+    private confirmLabel: string,
+    private onConfirm: () => void | Promise<void>
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.titleEl.setText(this.heading);
+    this.contentEl.createEl("p", { text: this.body });
+    new Setting(this.contentEl)
+      .addButton((button) => button.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((button) => button
+        .setButtonText(this.confirmLabel)
+        .setWarning()
+        .onClick(() => {
+          this.close();
+          void this.onConfirm();
+        }));
+  }
 }
 
 export class LocalSmartLookupSettingTab extends PluginSettingTab {
@@ -222,6 +249,57 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
           const parsed = Number.parseInt(value, 10);
           this.plugin.settings.chunkOverlap = Number.isFinite(parsed) ? Math.max(0, parsed) : DEFAULT_SETTINGS.chunkOverlap;
           await this.plugin.saveSettings();
+        }));
+
+    containerEl.createEl("h3", { text: "Index maintenance" });
+
+    const sizeSetting = new Setting(containerEl)
+      .setName("On-disk index size")
+      .setDesc("Measuring…");
+    void this.plugin.vectorStore.measureDbBytes().then((bytes) => {
+      sizeSetting.setDesc(`LanceDB folder is currently ${formatBytes(bytes)}.`);
+    }).catch(() => {
+      sizeSetting.setDesc("Could not measure LanceDB folder size.");
+    });
+
+    new Setting(containerEl)
+      .setName("Compact index now")
+      .setDesc("In-place reclaim of old LanceDB versions and fragments. Search may slow while it runs. Queue must be idle.")
+      .addButton((button) => button
+        .setButtonText("Compact")
+        .onClick(async () => {
+          button.setDisabled(true);
+          try {
+            await this.plugin.indexQueue.compactNow();
+            this.display();
+          } catch (error) {
+            new Notice(`Compact failed: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            button.setDisabled(false);
+          }
+        }));
+
+    new Setting(containerEl)
+      .setName("Wipe index and reindex")
+      .setDesc("Deletes the local vector index and queues a full re-embed. On a large vault this can take hours; semantic search is limited until the queue catches up.")
+      .addButton((button) => button
+        .setButtonText("Wipe & reindex")
+        .setWarning()
+        .onClick(() => {
+          new ConfirmModal(
+            this.app,
+            "Wipe Local Smart Lookup index?",
+            "This permanently deletes the on-disk LanceDB index and starts a full vault reindex. Re-embedding can take hours. Prefer Compact unless the index is corrupted.",
+            "Wipe & reindex",
+            async () => {
+              try {
+                await this.plugin.indexQueue.wipeAndReindex();
+                this.display();
+              } catch (error) {
+                new Notice(`Wipe failed: ${error instanceof Error ? error.message : String(error)}`);
+              }
+            }
+          ).open();
         }));
   }
 }
