@@ -91,6 +91,46 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
       }
     });
 
+  api.addRoute("/si/index_info/")
+    .get?.(async (_req, res) => {
+      try {
+        const settings = plugin.settings;
+        const meta = await plugin.vectorStore.readIndexMeta();
+        const regimes = await plugin.vectorStore.listIndexedEmbeddingRegimes();
+        const chunkCount = await plugin.vectorStore.count();
+        const docCount = (await plugin.vectorStore.paths()).size;
+
+        const primary = regimes[0] ?? {
+          embedding_model: meta?.embedding_model || "",
+          embedding_dim: meta?.embedding_dim || 0
+        };
+        const mixed = regimes.length > 1;
+        const settings_vs_index_mismatch = Boolean(
+          primary.embedding_model
+          && settings.embeddingModel
+          && primary.embedding_model !== settings.embeddingModel
+        );
+
+        sendJson(api, res, {
+          embed_model: primary.embedding_model || meta?.embedding_model || "",
+          embed_dim: primary.embedding_dim || meta?.embedding_dim || 0,
+          reranker: settings.rerankModel || "",
+          schema_ver: meta?.schema_ver || SCHEMA_VER,
+          metric: meta?.metric || "cosine",
+          doc_count: docCount,
+          chunk_count: chunkCount,
+          built_at: meta?.built_at || "",
+          // SI never applies the reranker; field is informational only.
+          si_applies_rerank: false,
+          mixed,
+          regimes,
+          settings_vs_index_mismatch
+        });
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+
   /**
    * Compile + execute a filter against the live index.
    * Used for RVG-8 DoD and as a debug aid; later SI endpoints reuse compileFilter.

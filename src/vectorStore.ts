@@ -334,6 +334,21 @@ export class LanceVectorStore {
     };
   }
 
+  /** Distinct (embedding_model, embedding_dim) pairs present in the store. */
+  async listIndexedEmbeddingRegimes(): Promise<Array<{ embedding_model: string; embedding_dim: number }>> {
+    const table = await this.getTable();
+    if (!table) return [];
+    const rows = await table.query().select(["embedding_model", "embedding_dim"]).toArray();
+    const seen = new Map<string, { embedding_model: string; embedding_dim: number }>();
+    for (const row of rows) {
+      const embedding_model = String(row.embedding_model ?? "");
+      const embedding_dim = Number(row.embedding_dim ?? 0);
+      const key = `${embedding_model}::${embedding_dim}`;
+      if (!seen.has(key)) seen.set(key, { embedding_model, embedding_dim });
+    }
+    return Array.from(seen.values());
+  }
+
   async count(): Promise<number> {
     const table = await this.getTable();
     return table ? table.countRows() : 0;
