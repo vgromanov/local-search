@@ -33,8 +33,15 @@ type Query = {
   toArray: () => Promise<Record<string, unknown>[]>;
 };
 
-type VectorQuery = Query & {
-  distanceType: (distanceType: "cosine") => VectorQuery;
+type VectorQuery = {
+  where: (predicate: string) => VectorQuery;
+  select: (columns: string[]) => VectorQuery;
+  limit: (limit: number) => VectorQuery;
+  distanceType: (distanceType: "cosine" | "l2" | "dot") => VectorQuery;
+  bypassVectorIndex: () => VectorQuery;
+  postfilter: () => VectorQuery;
+  distanceRange: (lowerBound?: number, upperBound?: number) => VectorQuery;
+  toArray: () => Promise<Record<string, unknown>[]>;
 };
 
 type IndexConfig = {
@@ -231,6 +238,21 @@ const SEARCH_COLUMNS = [
 
 function pathWhere(path: string): string {
   return `path = '${escapeSql(path)}'`;
+}
+
+function coerceVector(value: unknown): number[] | null {
+  if (Array.isArray(value)) {
+    const nums = value.map(Number);
+    return nums.every((n) => Number.isFinite(n)) ? nums : null;
+  }
+  if (value instanceof Float32Array || value instanceof Float64Array) {
+    return Array.from(value);
+  }
+  if (value && typeof value === "object" && typeof (value as { toArray?: unknown }).toArray === "function") {
+    const arr = (value as { toArray: () => unknown }).toArray();
+    return coerceVector(arr);
+  }
+  return null;
 }
 
 function buildWhere(options: SearchOptions): string | undefined {
@@ -571,6 +593,140 @@ export class LanceVectorStore {
 
     const rows = await query.select([...SEARCH_COLUMNS, "_distance"]).toArray();
     return rows.map(fromRow);
+  }
+
+  async getVectorByChunkId(chunkId: string): Promise<{
+    vector: number[];
+    embeddingDim: number;
+    path: string;
+    uuid: string;
+  } | null> {
+    const table = await this.getTable();
+    if (!table) return null;
+    const escaped = chunkId.replace(/'/g, "''");
+    const rows = await table.query()
+      .where(`id = '${escaped}'`)
+      .select(["id", "path", "uuid", "vector", "embedding_dim"])
+      .limit(1)
+      .toArray();
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    const vector = coerceVector(row.vector);
+    if (!vector || vector.length === 0) return null;
+    return {
+      vector,
+      embeddingDim: Number(row.embedding_dim ?? vector.length),
+      path: String(row.path ?? ""),
+      uuid: String(row.uuid ?? "")
+    };
+  }
+
+  /**
+   * Raw cosine neighbors without rerank.
+   * Default: bypassVectorIndex (flat) + where prefilter (LanceDB default).
+   */
+  async siKnn(options: {
+    vector: number[];
+    k: number;
+    threshold?: number;
+    whereSql?: string;
+    bypassVectorIndex?: boolean;
+  }): Promise<Array<{
+    chunk_id: string;
+    path: string;
+    uuid: string;
+    distance: number;
+    metadata: Record<string, unknown>;
+  }>> {
+    const table = await this.getTable();
+    if (!table) return [];
+
+    const k = Math.max(1, options.k);
+    let query = table.vectorSearch(options.vector).distanceType("cosine").limit(k);
+    if (options.bypassVectorIndex !== false) {
+      query = query.bypassVectorIndex();
+    }
+    if (options.whereSql?.trim()) {
+      query = query.where(options.whereSql);
+    }
+    if (typeof options.threshold === "number" && Number.isFinite(options.threshold)) {
+      query = query.distanceRange(0, options.threshold);
+    }
+
+    const rows = await query.select([
+      "id",
+      "path",
+      "uuid",
+      "folder",
+      "type",
+      "workspace",
+      "date_bucket",
+      "project",
+      "status",
+      "mtime",
+      "schema_ver",
+      "_distance"
+    ]).toArray();
+
+    const hits = rows.map((row) => {
+      const distance = typeof row._distance === "number" ? row._distance : Number(row._distance ?? Infinity);
+      return {
+        chunk_id: String(row.id ?? ""),
+        path: String(row.path ?? ""),
+        uuid: String(row.uuid ?? ""),
+        distance,
+        metadata: {
+          folder: String(row.folder ?? ""),
+          type: String(row.type ?? ""),
+          workspace: String(row.workspace ?? ""),
+          date_bucket: String(row.date_bucket ?? ""),
+          project: String(row.project ?? ""),
+          status: String(row.status ?? ""),
+          mtime: Number(row.mtime ?? 0),
+          schema_ver: String(row.schema_ver ?? "")
+        }
+      };
+    }).filter((hit) => Number.isFinite(hit.distance));
+
+    hits.sort((a, b) => {
+      if (a.distance !== b.distance) return a.distance - b.distance;
+      return a.chunk_id.localeCompare(b.chunk_id);
+    });
+    return hits;
+  }
+
+  /**
+   * Exact distance scan for count_neighbors: flat search with limit >= filtered count,
+   * select only group columns + distance (never vector).
+   */
+  async siScanDistances(options: {
+    vector: number[];
+    whereSql?: string;
+    groupBy: string;
+    threshold: number;
+  }): Promise<Array<{ group: string; distance: number }>> {
+    const table = await this.getTable();
+    if (!table) return [];
+
+    const filteredCount = options.whereSql?.trim()
+      ? await table.countRows(options.whereSql)
+      : await table.countRows();
+    if (filteredCount === 0) return [];
+
+    let query = table.vectorSearch(options.vector)
+      .distanceType("cosine")
+      .bypassVectorIndex()
+      .distanceRange(0, options.threshold)
+      .limit(Math.max(1, filteredCount));
+    if (options.whereSql?.trim()) {
+      query = query.where(options.whereSql);
+    }
+
+    const rows = await query.select([options.groupBy, "_distance"]).toArray();
+    return rows.map((row) => ({
+      group: String(row[options.groupBy] ?? ""),
+      distance: typeof row._distance === "number" ? row._distance : Number(row._distance ?? Infinity)
+    })).filter((row) => Number.isFinite(row.distance) && row.distance <= options.threshold);
   }
 
   async searchLexical(text: string, options: SearchOptions = {}): Promise<SearchResult[]> {
