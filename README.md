@@ -102,6 +102,7 @@ When a REST API plugin with extension support is enabled, routes are registered 
 - `GET /local-smart-lookup/status/`
 - `GET /si/health/`
 - `POST /si/filter/validate/`
+- `GET /si/index_info/`
 
 Semantic Index (`/si/*`) routes use trailing slashes and the Local REST bearer token.
 Filter grammar, keyset pagination, and cosine-distance threshold conventions:
