@@ -20,6 +20,15 @@ function joinUrl(base: string, path: string): string {
   return `${trimmedBase}${normalizedPath}`;
 }
 
+/** L2-normalize; returns null for zero vectors (avoid divide-by-zero). */
+export function l2Normalize(vector: number[]): number[] | null {
+  let sumSquares = 0;
+  for (const value of vector) sumSquares += value * value;
+  if (sumSquares === 0) return null;
+  const inv = 1 / Math.sqrt(sumSquares);
+  return vector.map((value) => value * inv);
+}
+
 export class LocalModelClient {
   constructor(private getSettings: () => LocalSmartLookupSettings) {}
 
