@@ -14,6 +14,7 @@ const QUERY_METADATA_MAX_LIMIT = 5000;
 const QUERY_METADATA_DEFAULT_LIMIT = 500;
 const KNN_MAX_K = 1000;
 const KNN_DEFAULT_K = 50;
+const COUNT_GROUP_BY = new Set(["uuid", "project", "workspace", "date_bucket", "path"]);
 
 type RouteHandler = (req: unknown, res: unknown) => void | Promise<void>;
 
@@ -79,6 +80,54 @@ function getRestApi(plugin: LocalSmartLookupPlugin): RestApi | null {
   return plugins?.["obsidian-local-rest-api"]?.getPublicApi?.(plugin.manifest)
     ?? plugins?.["obsidian-api"]?.getPublicApi?.(plugin.manifest)
     ?? null;
+}
+
+type ResolvedQueryVector =
+  | { ok: true; vector: number[] }
+  | { ok: false; status: number; message: string };
+
+async function resolveSiQueryVector(
+  plugin: LocalSmartLookupPlugin,
+  body: Record<string, unknown>
+): Promise<ResolvedQueryVector> {
+  const hasVector = Array.isArray(body.vector);
+  const hasChunkId = typeof body.chunk_id === "string" && body.chunk_id.trim().length > 0;
+
+  if (hasVector && hasChunkId) {
+    return { ok: false, status: 400, message: "Provide exactly one of `vector` or `chunk_id`" };
+  }
+  if (!hasVector && !hasChunkId) {
+    return { ok: false, status: 400, message: "Request requires `vector` or `chunk_id`" };
+  }
+
+  const meta = await plugin.vectorStore.readIndexMeta();
+  const sample = await plugin.vectorStore.sampleIndexedEmbedding();
+  const indexDim = meta?.embedding_dim || sample?.embeddingDim || 0;
+
+  let queryVector: number[];
+  if (hasChunkId) {
+    const resolved = await plugin.vectorStore.getVectorByChunkId(String(body.chunk_id).trim());
+    if (!resolved) {
+      return { ok: false, status: 404, message: `Unknown chunk_id: ${String(body.chunk_id).trim()}` };
+    }
+    queryVector = resolved.vector;
+  } else {
+    const raw = body.vector as unknown[];
+    if (raw.length === 0 || raw.some((v) => typeof v !== "number" || !Number.isFinite(v))) {
+      return { ok: false, status: 400, message: "`vector` must be a non-empty array of finite numbers" };
+    }
+    queryVector = raw as number[];
+  }
+
+  if (indexDim > 0 && queryVector.length !== indexDim) {
+    return {
+      ok: false,
+      status: 400,
+      message: `Vector dim ${queryVector.length} does not match index dim ${indexDim}`
+    };
+  }
+
+  return { ok: true, vector: queryVector };
 }
 
 async function handleEmbedText(plugin: LocalSmartLookupPlugin, api: RestApi, req: unknown, res: unknown): Promise<void> {
@@ -302,17 +351,6 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
     .post?.(async (req, res) => {
       try {
         const body = readJsonBody(req);
-        const hasVector = Array.isArray(body.vector);
-        const hasChunkId = typeof body.chunk_id === "string" && body.chunk_id.trim().length > 0;
-
-        if (hasVector && hasChunkId) {
-          sendError(api, res, 400, "Provide exactly one of `vector` or `chunk_id`");
-          return;
-        }
-        if (!hasVector && !hasChunkId) {
-          sendError(api, res, 400, "Request requires `vector` or `chunk_id`");
-          return;
-        }
 
         if (body.metric !== undefined && body.metric !== null && body.metric !== "cosine") {
           sendError(api, res, 400, "Only metric `cosine` is supported");
@@ -348,34 +386,14 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
           throw error;
         }
 
-        const meta = await plugin.vectorStore.readIndexMeta();
-        const sample = await plugin.vectorStore.sampleIndexedEmbedding();
-        const indexDim = meta?.embedding_dim || sample?.embeddingDim || 0;
-
-        let queryVector: number[];
-        if (hasChunkId) {
-          const resolved = await plugin.vectorStore.getVectorByChunkId(String(body.chunk_id).trim());
-          if (!resolved) {
-            sendError(api, res, 404, `Unknown chunk_id: ${String(body.chunk_id).trim()}`);
-            return;
-          }
-          queryVector = resolved.vector;
-        } else {
-          const raw = body.vector as unknown[];
-          if (raw.length === 0 || raw.some((v) => typeof v !== "number" || !Number.isFinite(v))) {
-            sendError(api, res, 400, "`vector` must be a non-empty array of finite numbers");
-            return;
-          }
-          queryVector = raw as number[];
-        }
-
-        if (indexDim > 0 && queryVector.length !== indexDim) {
-          sendError(api, res, 400, `Vector dim ${queryVector.length} does not match index dim ${indexDim}`);
+        const resolved = await resolveSiQueryVector(plugin, body);
+        if (!resolved.ok) {
+          sendError(api, res, resolved.status, resolved.message);
           return;
         }
 
         const hits = await plugin.vectorStore.siKnn({
-          vector: queryVector,
+          vector: resolved.vector,
           k,
           threshold,
           whereSql,
@@ -387,6 +405,78 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
           metric: "cosine",
           threshold: threshold ?? null,
           bypass_vector_index: true
+        });
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+
+  api.addRoute("/si/count_neighbors/")
+    .post?.(async (req, res) => {
+      try {
+        const body = readJsonBody(req);
+
+        if (body.metric !== undefined && body.metric !== null && body.metric !== "cosine") {
+          sendError(api, res, 400, "Only metric `cosine` is supported");
+          return;
+        }
+
+        if (typeof body.threshold !== "number" || !Number.isFinite(body.threshold) || body.threshold < 0) {
+          sendError(api, res, 400, "`threshold` must be a non-negative number (cosine distance, inclusive `<=`)");
+          return;
+        }
+        const threshold = body.threshold;
+
+        if (typeof body.group_by !== "string" || !COUNT_GROUP_BY.has(body.group_by)) {
+          sendError(
+            api,
+            res,
+            400,
+            "`group_by` must be one of: uuid, project, workspace, date_bucket, path"
+          );
+          return;
+        }
+        const groupBy = body.group_by;
+
+        let whereSql: string | undefined;
+        try {
+          whereSql = compileFilter({ where: body.where, filter: body.filter });
+        } catch (error) {
+          if (error instanceof FilterCompileError) {
+            sendError(api, res, 400, error);
+            return;
+          }
+          throw error;
+        }
+
+        const resolved = await resolveSiQueryVector(plugin, body);
+        if (!resolved.ok) {
+          sendError(api, res, resolved.status, resolved.message);
+          return;
+        }
+
+        const rows = await plugin.vectorStore.siScanDistances({
+          vector: resolved.vector,
+          whereSql,
+          groupBy,
+          threshold
+        });
+
+        const counts: Record<string, number> = {};
+        for (const row of rows) {
+          const key = row.group;
+          counts[key] = (counts[key] ?? 0) + 1;
+        }
+        const totalHits = rows.length;
+        const distinctGroups = Object.keys(counts).length;
+
+        sendJson(api, res, {
+          total_hits: totalHits,
+          distinct_groups: distinctGroups,
+          counts,
+          threshold,
+          metric: "cosine",
+          group_by: groupBy
         });
       } catch (error) {
         sendError(api, res, 500, error);
