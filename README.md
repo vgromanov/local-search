@@ -101,14 +101,24 @@ When a REST API plugin with extension support is enabled, routes are registered 
 - `POST /local-smart-lookup/reindex/`
 - `GET /local-smart-lookup/status/`
 - `GET /si/health/`
-- `POST /si/filter/validate/`
 - `GET /si/index_info/`
 - `POST /si/embed_text/`
 - `POST /si/query_metadata/`
+- `POST /si/knn/`
+- `POST /si/count_neighbors/`
+- `POST /si/get_vectors/`
+- `POST /si/filter/validate/`
 
 Semantic Index (`/si/*`) routes use trailing slashes and the Local REST bearer token.
-Filter grammar, keyset pagination, and cosine-distance threshold conventions:
-[docs/si-filter-grammar.md](docs/si-filter-grammar.md).
+They are **read-only**, **never rerank**, and use cosine **distance** thresholds
+(`_distance <= T`). Full request/response schemas: [docs/si-api.md](docs/si-api.md).
+Filter grammar and keyset pagination: [docs/si-filter-grammar.md](docs/si-filter-grammar.md).
+
+Smoke all SI endpoints (requires Local REST + `OBSIDIAN_API_KEY`):
+
+```bash
+./scripts/smoke_si.sh
+```
 
 Search body:
 

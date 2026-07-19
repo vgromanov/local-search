@@ -8,12 +8,20 @@ Callers may pass either a **structured** `filter` object or a **string** `where`
 Both are compiled to an AST and **re-emitted** as LanceDB SQL. Caller text is
 never passed through to `.where()` unmodified.
 
-## Endpoints (scaffold)
+## Endpoints
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/si/health/` | Liveness: `{ ok, version, schema_ver, chunks, indexReady }` |
-| `POST` | `/si/filter/validate/` | Compile + live count/sample against the index |
+| `GET` | `/si/health/` | Liveness |
+| `GET` | `/si/index_info/` | Regime stamp (`embed_model` / `embed_dim` / `schema_ver`) |
+| `POST` | `/si/embed_text/` | Model-consistent embeddings |
+| `POST` | `/si/query_metadata/` | Metadata-only keyset scan |
+| `POST` | `/si/knn/` | Flat cosine neighbors (no rerank) |
+| `POST` | `/si/count_neighbors/` | Exact grouped counts within distance threshold |
+| `POST` | `/si/get_vectors/` | Keyset vector export |
+| `POST` | `/si/filter/validate/` | Compile + live count/sample |
+
+Full schemas: [si-api.md](si-api.md).
 
 Auth: Local REST API bearer token (same as `/local-smart-lookup/*`).
 All SI paths use **trailing slashes**.
@@ -77,8 +85,8 @@ Helpers: `normalizeKeysetPage`, `keysetPredicate` in `src/filterCompiler.ts`.
 LanceDB cosine `_distance = 1 − cosine_similarity` ∈ `[0, 2]`.
 SI endpoints keep hits with `_distance <= threshold` (`distanceWithinThreshold`).
 
-Exact neighbor scans (later `count_neighbors`) must use:
-`prefilter` + `bypassVectorIndex` + `limit >= countRows(where)`, and must **not**
+Exact neighbor scans (`count_neighbors`) use:
+`prefilter` + `bypassVectorIndex` + `limit >= countRows(where)`, and **do not**
 select the `vector` column when only counting.
 
 ## Envelope
