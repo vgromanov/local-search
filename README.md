@@ -104,6 +104,7 @@ When a REST API plugin with extension support is enabled, routes are registered 
 - `POST /si/filter/validate/`
 - `GET /si/index_info/`
 - `POST /si/embed_text/`
+- `POST /si/query_metadata/`
 
 Semantic Index (`/si/*`) routes use trailing slashes and the Local REST bearer token.
 Filter grammar, keyset pagination, and cosine-distance threshold conventions:
