@@ -27,6 +27,8 @@ type Query = {
   where: (predicate: string) => Query;
   select: (columns: string[]) => Query;
   limit: (limit: number) => Query;
+  offset: (offset: number) => Query;
+  orderBy: (ordering: Array<{ columnName: string; order?: "asc" | "desc" }> | { columnName: string; order?: "asc" | "desc" }) => Query;
   fullTextSearch: (query: string, options?: { columns?: string[] }) => Query;
   toArray: () => Promise<Record<string, unknown>[]>;
 };
@@ -383,6 +385,51 @@ export class LanceVectorStore {
     ]);
     if (whereSql?.trim()) query = query.where(whereSql);
     return query.limit(Math.max(1, limit)).toArray();
+  }
+
+  /**
+   * Metadata-only keyset page for SI query_metadata / get_vectors.
+   * Stable order by `id` ascending; cursor is exclusive lower bound on `id`.
+   */
+  async queryMetadataPage(options: {
+    whereSql?: string;
+    fields: string[];
+    limit: number;
+    cursor?: string | null;
+  }): Promise<{ rows: Array<Record<string, unknown>>; next_cursor: string | null }> {
+    const table = await this.getTable();
+    if (!table) return { rows: [], next_cursor: null };
+
+    const selectCols = Array.from(new Set(["id", ...options.fields]));
+    let query = table.query().select(selectCols).orderBy({ columnName: "id", order: "asc" });
+
+    const predicates: string[] = [];
+    if (options.whereSql?.trim()) predicates.push(`(${options.whereSql.trim()})`);
+    if (options.cursor) {
+      const escaped = options.cursor.replace(/'/g, "''");
+      predicates.push(`(id > '${escaped}')`);
+    }
+    if (predicates.length > 0) {
+      query = query.where(predicates.join(" AND "));
+    }
+
+    const fetchLimit = Math.max(1, options.limit) + 1;
+    const rows = await query.limit(fetchLimit).toArray();
+    const page = rows.slice(0, options.limit);
+    const hasMore = rows.length > options.limit;
+    const last = page[page.length - 1];
+    const next_cursor = hasMore && last ? String(last.id ?? "") : null;
+    return {
+      rows: page.map((row) => {
+        const out: Record<string, unknown> = {};
+        for (const field of options.fields) {
+          out[field] = row[field] ?? null;
+        }
+        // Always include id for cursor consumers even if not requested? Prefer only requested fields per DoD.
+        return out;
+      }),
+      next_cursor
+    };
   }
 
   async paths(): Promise<Set<string>> {

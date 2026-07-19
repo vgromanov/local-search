@@ -1,14 +1,17 @@
 import type LocalSmartLookupPlugin from "./main";
 import {
   FilterCompileError,
-  compileFilter
+  compileFilter,
+  normalizeKeysetPage
 } from "./filterCompiler";
 import { l2Normalize } from "./modelClient";
-import { SCHEMA_VER } from "./schema";
+import { QUERYABLE_FIELDS, SCHEMA_VER } from "./schema";
 import type { ObsidianRestPublicApi } from "./types";
 
 const EMBED_BATCH_MAX = 64;
 const EMBED_TEXT_MAX_CHARS = 32_000;
+const QUERY_METADATA_MAX_LIMIT = 5000;
+const QUERY_METADATA_DEFAULT_LIMIT = 500;
 
 type RouteHandler = (req: unknown, res: unknown) => void | Promise<void>;
 
@@ -221,6 +224,73 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
     .post?.(async (req, res) => {
       try {
         await handleEmbedText(plugin, api, req, res);
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+
+  api.addRoute("/si/query_metadata/")
+    .post?.(async (req, res) => {
+      try {
+        const body = readJsonBody(req);
+        if (body.offset !== undefined && body.offset !== null) {
+          sendError(api, res, 400, "Numeric `offset` is not supported; use keyset `cursor` (last row `id`)");
+          return;
+        }
+
+        let page;
+        try {
+          page = normalizeKeysetPage({
+            cursor: body.cursor,
+            limit: body.limit,
+            defaultLimit: QUERY_METADATA_DEFAULT_LIMIT,
+            maxLimit: QUERY_METADATA_MAX_LIMIT
+          });
+        } catch (error) {
+          if (error instanceof FilterCompileError) {
+            sendError(api, res, 400, error);
+            return;
+          }
+          throw error;
+        }
+
+        if (!Array.isArray(body.fields) || body.fields.length === 0) {
+          sendError(api, res, 400, "Request requires non-empty `fields` array");
+          return;
+        }
+
+        const fields: string[] = [];
+        for (const field of body.fields) {
+          if (typeof field !== "string" || !field.trim()) {
+            sendError(api, res, 400, "Each field must be a non-empty string");
+            return;
+          }
+          const column = QUERYABLE_FIELDS[field];
+          if (!column) {
+            sendError(api, res, 400, `Unknown field: ${field}`);
+            return;
+          }
+          fields.push(column);
+        }
+
+        let whereSql: string | undefined;
+        try {
+          whereSql = compileFilter({ where: body.where, filter: body.filter });
+        } catch (error) {
+          if (error instanceof FilterCompileError) {
+            sendError(api, res, 400, error);
+            return;
+          }
+          throw error;
+        }
+
+        const result = await plugin.vectorStore.queryMetadataPage({
+          whereSql,
+          fields,
+          limit: page.limit,
+          cursor: page.cursor
+        });
+        sendJson(api, res, result);
       } catch (error) {
         sendError(api, res, 500, error);
       }
