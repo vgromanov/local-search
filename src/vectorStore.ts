@@ -339,6 +339,37 @@ export class LanceVectorStore {
     return table ? table.countRows() : 0;
   }
 
+  /** Count rows matching a compiler-emitted SQL predicate (SI path). */
+  async countFiltered(whereSql?: string): Promise<number> {
+    const table = await this.getTable();
+    if (!table) return 0;
+    return whereSql?.trim() ? table.countRows(whereSql) : table.countRows();
+  }
+
+  /**
+   * Metadata sample for SI filter live validation.
+   * Returns stable-ish rows (caller may sort); selects only safe columns.
+   */
+  async sampleFiltered(
+    whereSql: string | undefined,
+    limit = 5
+  ): Promise<Array<Record<string, unknown>>> {
+    const table = await this.getTable();
+    if (!table) return [];
+    let query = table.query().select([
+      "id",
+      "path",
+      "uuid",
+      "workspace",
+      "date_bucket",
+      "type",
+      "mtime",
+      "schema_ver"
+    ]);
+    if (whereSql?.trim()) query = query.where(whereSql);
+    return query.limit(Math.max(1, limit)).toArray();
+  }
+
   async paths(): Promise<Set<string>> {
     const table = await this.getTable();
     if (!table) return new Set();

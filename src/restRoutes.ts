@@ -1,4 +1,9 @@
 import type LocalSmartLookupPlugin from "./main";
+import {
+  FilterCompileError,
+  compileFilter
+} from "./filterCompiler";
+import { SCHEMA_VER } from "./schema";
 import type { ObsidianRestPublicApi } from "./types";
 
 type RouteHandler = (req: unknown, res: unknown) => void | Promise<void>;
@@ -67,6 +72,56 @@ function getRestApi(plugin: LocalSmartLookupPlugin): RestApi | null {
     ?? null;
 }
 
+function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
+  // Permanent liveness probe for mining clients (trailing slash required).
+  api.addRoute("/si/health/")
+    .get?.(async (_req, res) => {
+      try {
+        const chunkCount = await plugin.vectorStore.count();
+        const meta = await plugin.vectorStore.readIndexMeta();
+        sendJson(api, res, {
+          ok: true,
+          version: plugin.manifest.version,
+          schema_ver: meta?.schema_ver || SCHEMA_VER,
+          chunks: chunkCount,
+          indexReady: chunkCount > 0
+        });
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+
+  /**
+   * Compile + execute a filter against the live index.
+   * Used for RVG-8 DoD and as a debug aid; later SI endpoints reuse compileFilter.
+   *
+   * Body: { where?: string, filter?: object, limit?: number }
+   * Success: { sql, row_count, sample }
+   * Bad filter: 400 via sendError
+   */
+  api.addRoute("/si/filter/validate/")
+    .post?.(async (req, res) => {
+      try {
+        const body = readJsonBody(req);
+        const sql = compileFilter({ where: body.where, filter: body.filter });
+        const limit = typeof body.limit === "number" ? Math.min(20, Math.max(1, Math.floor(body.limit))) : 5;
+        const rowCount = await plugin.vectorStore.countFiltered(sql);
+        const sample = await plugin.vectorStore.sampleFiltered(sql, limit);
+        sendJson(api, res, {
+          sql: sql ?? null,
+          row_count: rowCount,
+          sample
+        });
+      } catch (error) {
+        if (error instanceof FilterCompileError) {
+          sendError(api, res, 400, error);
+          return;
+        }
+        sendError(api, res, 500, error);
+      }
+    });
+}
+
 export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void) | null {
   const api = getRestApi(plugin);
   if (!api) return null;
@@ -118,6 +173,8 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void)
         sendError(api, res, 500, error);
       }
     });
+
+  registerSiRoutes(plugin, api);
 
   return () => api.unregister?.();
 }
