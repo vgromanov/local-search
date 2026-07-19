@@ -3,8 +3,12 @@ import {
   FilterCompileError,
   compileFilter
 } from "./filterCompiler";
+import { l2Normalize } from "./modelClient";
 import { SCHEMA_VER } from "./schema";
 import type { ObsidianRestPublicApi } from "./types";
+
+const EMBED_BATCH_MAX = 64;
+const EMBED_TEXT_MAX_CHARS = 32_000;
 
 type RouteHandler = (req: unknown, res: unknown) => void | Promise<void>;
 
@@ -72,6 +76,88 @@ function getRestApi(plugin: LocalSmartLookupPlugin): RestApi | null {
     ?? null;
 }
 
+async function handleEmbedText(plugin: LocalSmartLookupPlugin, api: RestApi, req: unknown, res: unknown): Promise<void> {
+  const body = readJsonBody(req);
+  if (!Array.isArray(body.texts)) {
+    sendError(api, res, 400, "Request requires `texts` array");
+    return;
+  }
+  if (body.texts.length === 0) {
+    sendError(api, res, 400, "`texts` must be a non-empty array");
+    return;
+  }
+  if (body.texts.length > EMBED_BATCH_MAX) {
+    sendError(api, res, 400, `Batch size exceeds max ${EMBED_BATCH_MAX}`);
+    return;
+  }
+
+  const normalize = body.normalize !== false;
+  const vectors: Array<number[] | null> = new Array(body.texts.length).fill(null);
+  const errors: Array<{ index: number; message: string }> = [];
+  const validIndices: number[] = [];
+  const validTexts: string[] = [];
+
+  body.texts.forEach((item, index) => {
+    if (typeof item !== "string") {
+      errors.push({ index, message: "Text must be a string" });
+      return;
+    }
+    if (!item.trim()) {
+      errors.push({ index, message: "Text is empty" });
+      return;
+    }
+    if (item.length > EMBED_TEXT_MAX_CHARS) {
+      errors.push({ index, message: `Text exceeds max length ${EMBED_TEXT_MAX_CHARS}` });
+      return;
+    }
+    validIndices.push(index);
+    validTexts.push(item);
+  });
+
+  let embedModel = plugin.settings.embeddingModel;
+  let embedDim = 0;
+
+  if (validTexts.length > 0) {
+    const rawVectors = await plugin.modelClient.embed(validTexts);
+    if (rawVectors.length < validTexts.length) {
+      for (let i = rawVectors.length; i < validTexts.length; i++) {
+        errors.push({ index: validIndices[i], message: "Embedding provider returned fewer vectors than inputs" });
+      }
+    }
+    rawVectors.forEach((vector, offset) => {
+      const index = validIndices[offset];
+      if (!Array.isArray(vector) || vector.length === 0) {
+        errors.push({ index, message: "Empty embedding vector" });
+        return;
+      }
+      embedDim = embedDim || vector.length;
+      if (normalize) {
+        const normalized = l2Normalize(vector);
+        if (!normalized) {
+          errors.push({ index, message: "Zero vector cannot be L2-normalized" });
+          return;
+        }
+        vectors[index] = normalized;
+      } else {
+        vectors[index] = vector;
+      }
+    });
+  }
+
+  if (!embedDim) {
+    const sample = await plugin.vectorStore.sampleIndexedEmbedding();
+    embedDim = sample?.embeddingDim ?? 0;
+    if (sample?.embeddingModel) embedModel = sample.embeddingModel;
+  }
+
+  sendJson(api, res, {
+    embed_model: embedModel,
+    embed_dim: embedDim,
+    vectors,
+    errors
+  });
+}
+
 function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
   // Permanent liveness probe for mining clients (trailing slash required).
   api.addRoute("/si/health/")
@@ -126,6 +212,15 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
           regimes,
           settings_vs_index_mismatch
         });
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+
+  api.addRoute("/si/embed_text/")
+    .post?.(async (req, res) => {
+      try {
+        await handleEmbedText(plugin, api, req, res);
       } catch (error) {
         sendError(api, res, 500, error);
       }
