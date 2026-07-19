@@ -12,6 +12,8 @@ const EMBED_BATCH_MAX = 64;
 const EMBED_TEXT_MAX_CHARS = 32_000;
 const QUERY_METADATA_MAX_LIMIT = 5000;
 const QUERY_METADATA_DEFAULT_LIMIT = 500;
+const KNN_MAX_K = 1000;
+const KNN_DEFAULT_K = 50;
 
 type RouteHandler = (req: unknown, res: unknown) => void | Promise<void>;
 
@@ -291,6 +293,101 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
           cursor: page.cursor
         });
         sendJson(api, res, result);
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+
+  api.addRoute("/si/knn/")
+    .post?.(async (req, res) => {
+      try {
+        const body = readJsonBody(req);
+        const hasVector = Array.isArray(body.vector);
+        const hasChunkId = typeof body.chunk_id === "string" && body.chunk_id.trim().length > 0;
+
+        if (hasVector && hasChunkId) {
+          sendError(api, res, 400, "Provide exactly one of `vector` or `chunk_id`");
+          return;
+        }
+        if (!hasVector && !hasChunkId) {
+          sendError(api, res, 400, "Request requires `vector` or `chunk_id`");
+          return;
+        }
+
+        if (body.metric !== undefined && body.metric !== null && body.metric !== "cosine") {
+          sendError(api, res, 400, "Only metric `cosine` is supported");
+          return;
+        }
+
+        let k = KNN_DEFAULT_K;
+        if (body.k !== undefined && body.k !== null) {
+          if (typeof body.k !== "number" || !Number.isFinite(body.k) || body.k < 1) {
+            sendError(api, res, 400, "`k` must be a positive number");
+            return;
+          }
+          k = Math.min(KNN_MAX_K, Math.floor(body.k));
+        }
+
+        let threshold: number | undefined;
+        if (body.threshold !== undefined && body.threshold !== null) {
+          if (typeof body.threshold !== "number" || !Number.isFinite(body.threshold) || body.threshold < 0) {
+            sendError(api, res, 400, "`threshold` must be a non-negative number (cosine distance)");
+            return;
+          }
+          threshold = body.threshold;
+        }
+
+        let whereSql: string | undefined;
+        try {
+          whereSql = compileFilter({ where: body.where, filter: body.filter });
+        } catch (error) {
+          if (error instanceof FilterCompileError) {
+            sendError(api, res, 400, error);
+            return;
+          }
+          throw error;
+        }
+
+        const meta = await plugin.vectorStore.readIndexMeta();
+        const sample = await plugin.vectorStore.sampleIndexedEmbedding();
+        const indexDim = meta?.embedding_dim || sample?.embeddingDim || 0;
+
+        let queryVector: number[];
+        if (hasChunkId) {
+          const resolved = await plugin.vectorStore.getVectorByChunkId(String(body.chunk_id).trim());
+          if (!resolved) {
+            sendError(api, res, 404, `Unknown chunk_id: ${String(body.chunk_id).trim()}`);
+            return;
+          }
+          queryVector = resolved.vector;
+        } else {
+          const raw = body.vector as unknown[];
+          if (raw.length === 0 || raw.some((v) => typeof v !== "number" || !Number.isFinite(v))) {
+            sendError(api, res, 400, "`vector` must be a non-empty array of finite numbers");
+            return;
+          }
+          queryVector = raw as number[];
+        }
+
+        if (indexDim > 0 && queryVector.length !== indexDim) {
+          sendError(api, res, 400, `Vector dim ${queryVector.length} does not match index dim ${indexDim}`);
+          return;
+        }
+
+        const hits = await plugin.vectorStore.siKnn({
+          vector: queryVector,
+          k,
+          threshold,
+          whereSql,
+          bypassVectorIndex: true
+        });
+        sendJson(api, res, {
+          hits,
+          k,
+          metric: "cosine",
+          threshold: threshold ?? null,
+          bypass_vector_index: true
+        });
       } catch (error) {
         sendError(api, res, 500, error);
       }
