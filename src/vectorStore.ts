@@ -454,6 +454,96 @@ export class LanceVectorStore {
     };
   }
 
+  /** Keyset vector export for SI get_vectors (id ascending). */
+  async getVectorsPage(options: {
+    whereSql?: string;
+    limit: number;
+    cursor?: string | null;
+    includeText?: boolean;
+  }): Promise<{
+    items: Array<{
+      chunk_id: string;
+      path: string;
+      uuid: string;
+      vector: number[];
+      text?: string;
+      metadata: Record<string, unknown>;
+    }>;
+    next_cursor: string | null;
+  }> {
+    const table = await this.getTable();
+    if (!table) return { items: [], next_cursor: null };
+
+    const selectCols = [
+      "id",
+      "path",
+      "uuid",
+      "vector",
+      "folder",
+      "type",
+      "workspace",
+      "date_bucket",
+      "project",
+      "status",
+      "mtime",
+      "schema_ver",
+      "embedding_dim"
+    ];
+    if (options.includeText) selectCols.push("text");
+
+    let query = table.query().select(selectCols).orderBy({ columnName: "id", order: "asc" });
+    const predicates: string[] = [];
+    if (options.whereSql?.trim()) predicates.push(`(${options.whereSql.trim()})`);
+    if (options.cursor) {
+      const escaped = options.cursor.replace(/'/g, "''");
+      predicates.push(`(id > '${escaped}')`);
+    }
+    if (predicates.length > 0) {
+      query = query.where(predicates.join(" AND "));
+    }
+
+    const fetchLimit = Math.max(1, options.limit) + 1;
+    const rows = await query.limit(fetchLimit).toArray();
+    const page = rows.slice(0, options.limit);
+    const hasMore = rows.length > options.limit;
+    const last = page[page.length - 1];
+    const next_cursor = hasMore && last ? String(last.id ?? "") : null;
+
+    const items = page.map((row) => {
+      const vector = coerceVector(row.vector) ?? [];
+      const item: {
+        chunk_id: string;
+        path: string;
+        uuid: string;
+        vector: number[];
+        text?: string;
+        metadata: Record<string, unknown>;
+      } = {
+        chunk_id: String(row.id ?? ""),
+        path: String(row.path ?? ""),
+        uuid: String(row.uuid ?? ""),
+        vector,
+        metadata: {
+          folder: String(row.folder ?? ""),
+          type: String(row.type ?? ""),
+          workspace: String(row.workspace ?? ""),
+          date_bucket: String(row.date_bucket ?? ""),
+          project: String(row.project ?? ""),
+          status: String(row.status ?? ""),
+          mtime: Number(row.mtime ?? 0),
+          schema_ver: String(row.schema_ver ?? ""),
+          embedding_dim: Number(row.embedding_dim ?? vector.length)
+        }
+      };
+      if (options.includeText) {
+        item.text = String(row.text ?? "");
+      }
+      return item;
+    });
+
+    return { items, next_cursor };
+  }
+
   async paths(): Promise<Set<string>> {
     const table = await this.getTable();
     if (!table) return new Set();

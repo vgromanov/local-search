@@ -15,6 +15,8 @@ const QUERY_METADATA_DEFAULT_LIMIT = 500;
 const KNN_MAX_K = 1000;
 const KNN_DEFAULT_K = 50;
 const COUNT_GROUP_BY = new Set(["uuid", "project", "workspace", "date_bucket", "path"]);
+const GET_VECTORS_DEFAULT_LIMIT = 512;
+const GET_VECTORS_MAX_LIMIT = 1000;
 
 type RouteHandler = (req: unknown, res: unknown) => void | Promise<void>;
 
@@ -478,6 +480,55 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
           metric: "cosine",
           group_by: groupBy
         });
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+
+  api.addRoute("/si/get_vectors/")
+    .post?.(async (req, res) => {
+      try {
+        const body = readJsonBody(req);
+        if (body.offset !== undefined && body.offset !== null) {
+          sendError(api, res, 400, "Numeric `offset` is not supported; use keyset `cursor` (last item `chunk_id`)");
+          return;
+        }
+
+        let page;
+        try {
+          page = normalizeKeysetPage({
+            cursor: body.cursor,
+            limit: body.limit,
+            defaultLimit: GET_VECTORS_DEFAULT_LIMIT,
+            maxLimit: GET_VECTORS_MAX_LIMIT
+          });
+        } catch (error) {
+          if (error instanceof FilterCompileError) {
+            sendError(api, res, 400, error);
+            return;
+          }
+          throw error;
+        }
+
+        let whereSql: string | undefined;
+        try {
+          whereSql = compileFilter({ where: body.where, filter: body.filter });
+        } catch (error) {
+          if (error instanceof FilterCompileError) {
+            sendError(api, res, 400, error);
+            return;
+          }
+          throw error;
+        }
+
+        const includeText = body.include_text === true;
+        const result = await plugin.vectorStore.getVectorsPage({
+          whereSql,
+          limit: page.limit,
+          cursor: page.cursor,
+          includeText
+        });
+        sendJson(api, res, result);
       } catch (error) {
         sendError(api, res, 500, error);
       }
