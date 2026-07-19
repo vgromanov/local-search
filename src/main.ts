@@ -5,7 +5,7 @@ import { VaultIndexer } from "./indexer";
 import { LocalModelClient } from "./modelClient";
 import { registerRestRoutes } from "./restRoutes";
 import { SearchService } from "./searchService";
-import { DEFAULT_SETTINGS, LocalSmartLookupSettingTab } from "./settings";
+import { ConfirmModal, DEFAULT_SETTINGS, LocalSmartLookupSettingTab } from "./settings";
 import type { LocalSmartLookupSettings } from "./types";
 import { LanceVectorStore } from "./vectorStore";
 import { LocalSmartLookupView, VIEW_TYPE_LOCAL_SMART_LOOKUP } from "./view";
@@ -68,6 +68,32 @@ export default class LocalSmartLookupPlugin extends Plugin {
             ? "Local Smart Lookup: lexical index ready."
             : "Local Smart Lookup: lexical index build failed (see console).");
         });
+      }
+    });
+
+    this.addCommand({
+      id: "compact-index-local-smart-lookup",
+      name: "Compact LanceDB index",
+      callback: () => {
+        void this.indexQueue.compactNow().catch((error) => {
+          new Notice(`Compact failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+    });
+
+    this.addCommand({
+      id: "wipe-index-local-smart-lookup",
+      name: "Wipe index and reindex (destructive)",
+      callback: () => {
+        new ConfirmModal(
+          this.app,
+          "Wipe Local Smart Lookup index?",
+          "This permanently deletes the on-disk LanceDB index and starts a full vault reindex. Re-embedding can take hours. Prefer Compact unless the index is corrupted.",
+          "Wipe & reindex",
+          () => this.indexQueue.wipeAndReindex().catch((error) => {
+            new Notice(`Wipe failed: ${error instanceof Error ? error.message : String(error)}`);
+          })
+        ).open();
       }
     });
 

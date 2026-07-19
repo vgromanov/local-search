@@ -1,5 +1,7 @@
 import type { DataAdapter, Plugin } from "obsidian";
 import { normalizePath } from "obsidian";
+import * as fs from "fs";
+import { promises as fsp } from "fs";
 import {
   INDEX_METRIC,
   QUERYABLE_FIELDS,
@@ -14,6 +16,24 @@ type FtsOptions = {
   stem?: boolean;
   removeStopWords?: boolean;
   asciiFolding?: boolean;
+};
+
+type OptimizeOptions = {
+  cleanupOlderThan?: Date;
+  deleteUnverified?: boolean;
+};
+
+type OptimizeStats = {
+  compaction?: { fragmentsRemoved?: number; filesAdded?: number; filesRemoved?: number };
+  prune?: { bytesRemoved?: number; oldVersionsRemoved?: number };
+};
+
+export type CompactResult = {
+  beforeBytes: number;
+  afterBytes: number;
+  passes: number;
+  bytesRemovedReported: number;
+  versionsRemovedReported: number;
 };
 
 type LanceDbModule = {
@@ -59,7 +79,7 @@ type Table = {
   vectorSearch: (vector: number[]) => VectorQuery;
   createIndex: (column: string, options?: { config?: unknown; replace?: boolean }) => Promise<void>;
   listIndices: () => Promise<IndexConfig[]>;
-  optimize: () => Promise<unknown>;
+  optimize: (options?: Partial<OptimizeOptions>) => Promise<OptimizeStats>;
 };
 
 type Connection = {
@@ -213,6 +233,49 @@ function fromRow(row: Record<string, unknown>): SearchResult {
   };
 }
 
+/** Normalize a Lance query row back into a storable chunk record (for rewrite compact). */
+function normalizeStorageRow(row: Record<string, unknown>): Record<string, unknown> | null {
+  const vector = coerceVector(row.vector);
+  if (!vector || vector.length === 0) return null;
+  return {
+    id: String(row.id ?? ""),
+    path: String(row.path ?? ""),
+    folder: String(row.folder ?? ""),
+    basename: String(row.basename ?? ""),
+    mtime: Number(row.mtime ?? 0),
+    size: Number(row.size ?? 0),
+    position: Number(row.position ?? 0),
+    text: String(row.text ?? ""),
+    vector,
+    title: String(row.title ?? ""),
+    status: String(row.status ?? ""),
+    project: String(row.project ?? ""),
+    type: String(row.type ?? ""),
+    uuid: String(row.uuid ?? ""),
+    workspace: String(row.workspace ?? ""),
+    date_bucket: String(row.date_bucket ?? ""),
+    signal_kind: String(row.signal_kind ?? ""),
+    workflow_id: String(row.workflow_id ?? ""),
+    schema_ver: String(row.schema_ver ?? SCHEMA_VER),
+    content_hash: String(row.content_hash ?? ""),
+    body_hash: String(row.body_hash ?? ""),
+    frontmatter_hash: String(row.frontmatter_hash ?? ""),
+    chunking_config_hash: String(row.chunking_config_hash ?? ""),
+    embedding_model: String(row.embedding_model ?? ""),
+    embedding_dim: Number(row.embedding_dim ?? vector.length),
+    indexed_at: String(row.indexed_at ?? ""),
+    tags_json: String(row.tags_json ?? "[]"),
+    tags_text: String(row.tags_text ?? "||"),
+    inline_tags_json: String(row.inline_tags_json ?? "[]"),
+    frontmatter_tags_json: String(row.frontmatter_tags_json ?? "[]"),
+    aliases_json: String(row.aliases_json ?? "[]"),
+    aliases_text: String(row.aliases_text ?? "||"),
+    frontmatter_json: String(row.frontmatter_json ?? "{}"),
+    frontmatter_keys_json: String(row.frontmatter_keys_json ?? "[]"),
+    frontmatter_keys_text: String(row.frontmatter_keys_text ?? "||")
+  };
+}
+
 const SEARCH_COLUMNS = [
   "id",
   "path",
@@ -289,6 +352,61 @@ function buildWhere(options: SearchOptions): string | undefined {
   return clauses.length > 0 ? clauses.join(" AND ") : undefined;
 }
 
+async function sumDirectoryBytes(root: string): Promise<number> {
+  let total = 0;
+  async function walk(dir: string): Promise<void> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      if (entry.isFile() || entry.isSymbolicLink()) {
+        try {
+          const st = await fsp.stat(full);
+          total += st.size;
+        } catch {
+          // ignore races during concurrent compact
+        }
+      }
+    }
+  }
+  await walk(root);
+  return total;
+}
+
+function freeBytesAvailable(path: string): number | null {
+  try {
+    const statfs = (fs as typeof fs & {
+      statfsSync?: (path: string) => { bavail: number | bigint; bsize: number | bigint };
+    }).statfsSync;
+    if (!statfs) return null;
+    const s = statfs(path);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch {
+    return null;
+  }
+}
+
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "?";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
 export class LanceVectorStore {
   private connection: Connection | null = null;
   private table: Table | null = null;
@@ -300,11 +418,28 @@ export class LanceVectorStore {
   private lexicalColumn = "text";
   private lexicalIndexReady = false;
   private didResetSchema = false;
+  /** Serializes all Lance writers + optimize/wipe (required for deleteUnverified). */
+  private mutationTail: Promise<unknown> = Promise.resolve();
 
   constructor(private plugin: Plugin, private adapter: DataAdapter) {
     this.pluginDir = normalizePath(plugin.manifest.dir ?? ".obsidian/plugins/local-smart-lookup");
     this.dbPath = normalizePath(`${this.pluginDir}/lancedb`);
     this.metaPath = normalizePath(`${this.pluginDir}/index-meta.json`);
+  }
+
+  private withMutationLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.mutationTail.then(fn, fn);
+    this.mutationTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** Absolute path to the on-disk LanceDB directory. */
+  absoluteDbPath(): string {
+    return this.absoluteAdapterPath(this.dbPath);
+  }
+
+  async measureDbBytes(): Promise<number> {
+    return sumDirectoryBytes(this.absoluteDbPath());
   }
 
   /** True if load() dropped the chunks table due to schema_ver mismatch. */
@@ -600,76 +735,84 @@ export class LanceVectorStore {
   }
 
   async replacePath(path: string, records: VectorRecord[]): Promise<void> {
-    await this.deletePath(path);
-    if (records.length === 0) return;
-    const table = await this.ensureTable(records);
-    await table.add(records.map(toRow));
+    return this.withMutationLock(async () => {
+      await this.deletePathUnlocked(path);
+      if (records.length === 0) return;
+      const table = await this.ensureTable(records);
+      await table.add(records.map(toRow));
+    });
   }
 
   async updatePathMetadata(path: string, metadata: Partial<VectorRecord>): Promise<void> {
-    const table = await this.getTable();
-    if (!table) return;
-    const tags = metadata.tags ?? [];
-    const inlineTags = metadata.inlineTags ?? [];
-    const frontmatterTags = metadata.frontmatterTags ?? [];
-    const aliases = metadata.aliases ?? [];
-    const frontmatter = metadata.frontmatter ?? {};
-    const frontmatterKeys = metadata.frontmatterKeys ?? [];
+    return this.withMutationLock(async () => {
+      const table = await this.getTable();
+      if (!table) return;
+      const tags = metadata.tags ?? [];
+      const inlineTags = metadata.inlineTags ?? [];
+      const frontmatterTags = metadata.frontmatterTags ?? [];
+      const aliases = metadata.aliases ?? [];
+      const frontmatter = metadata.frontmatter ?? {};
+      const frontmatterKeys = metadata.frontmatterKeys ?? [];
 
-    await table.update({
-      where: pathWhere(path),
-      values: {
-        mtime: metadata.mtime ?? 0,
-        size: metadata.size ?? 0,
-        content_hash: metadata.contentHash ?? "",
-        frontmatter_hash: metadata.frontmatterHash ?? "",
-        tags_json: JSON.stringify(tags),
-        tags_text: listText(tags),
-        inline_tags_json: JSON.stringify(inlineTags),
-        frontmatter_tags_json: JSON.stringify(frontmatterTags),
-        aliases_json: JSON.stringify(aliases),
-        aliases_text: listText(aliases),
-        frontmatter_json: JSON.stringify(frontmatter),
-        frontmatter_keys_json: JSON.stringify(frontmatterKeys),
-        frontmatter_keys_text: listText(frontmatterKeys),
-        title: metadata.title ?? "",
-        status: metadata.status ?? "",
-        project: metadata.project ?? "",
-        type: metadata.type ?? "",
-        uuid: metadata.uuid ?? "",
-        workspace: metadata.workspace ?? "",
-        date_bucket: metadata.date_bucket ?? "",
-        signal_kind: metadata.signal_kind ?? "",
-        workflow_id: metadata.workflow_id ?? "",
-        schema_ver: metadata.schema_ver ?? SCHEMA_VER,
-        indexed_at: metadata.indexedAt ?? new Date().toISOString()
-      }
+      await table.update({
+        where: pathWhere(path),
+        values: {
+          mtime: metadata.mtime ?? 0,
+          size: metadata.size ?? 0,
+          content_hash: metadata.contentHash ?? "",
+          frontmatter_hash: metadata.frontmatterHash ?? "",
+          tags_json: JSON.stringify(tags),
+          tags_text: listText(tags),
+          inline_tags_json: JSON.stringify(inlineTags),
+          frontmatter_tags_json: JSON.stringify(frontmatterTags),
+          aliases_json: JSON.stringify(aliases),
+          aliases_text: listText(aliases),
+          frontmatter_json: JSON.stringify(frontmatter),
+          frontmatter_keys_json: JSON.stringify(frontmatterKeys),
+          frontmatter_keys_text: listText(frontmatterKeys),
+          title: metadata.title ?? "",
+          status: metadata.status ?? "",
+          project: metadata.project ?? "",
+          type: metadata.type ?? "",
+          uuid: metadata.uuid ?? "",
+          workspace: metadata.workspace ?? "",
+          date_bucket: metadata.date_bucket ?? "",
+          signal_kind: metadata.signal_kind ?? "",
+          workflow_id: metadata.workflow_id ?? "",
+          schema_ver: metadata.schema_ver ?? SCHEMA_VER,
+          indexed_at: metadata.indexedAt ?? new Date().toISOString()
+        }
+      });
     });
   }
 
   async renamePath(oldPath: string, newPath: string, basename: string, folder: string): Promise<void> {
-    const table = await this.getTable();
-    if (!table) return;
-    await table.update({
-      where: pathWhere(oldPath),
-      values: {
-        path: newPath,
-        basename,
-        folder
-      }
+    return this.withMutationLock(async () => {
+      const table = await this.getTable();
+      if (!table) return;
+      await table.update({
+        where: pathWhere(oldPath),
+        values: {
+          path: newPath,
+          basename,
+          folder
+        }
+      });
     });
   }
 
   async removeMissingPaths(existingPaths: Set<string>): Promise<number> {
-    const indexed = await this.paths();
-    let removed = 0;
-    for (const path of indexed) {
-      if (!existingPaths.has(path)) {
-        await this.deletePath(path);
-        removed++;
+    return this.withMutationLock(async () => {
+      const indexed = await this.paths();
+      let removed = 0;
+      for (const path of indexed) {
+        if (!existingPaths.has(path)) {
+          await this.deletePathUnlocked(path);
+          removed++;
+        }
       }
-    }
-    return removed;
+      return removed;
+    });
   }
 
   async search(vector: number[], options: SearchOptions = {}): Promise<SearchResult[]> {
@@ -840,6 +983,10 @@ export class LanceVectorStore {
   }
 
   async ensureLexicalIndex(rebuild = false): Promise<boolean> {
+    return this.withMutationLock(() => this.ensureLexicalIndexUnlocked(rebuild));
+  }
+
+  private async ensureLexicalIndexUnlocked(rebuild = false): Promise<boolean> {
     if (this.lexicalIndexReady && !rebuild) return true;
     const table = await this.getTable();
     if (!table) return false;
@@ -872,14 +1019,155 @@ export class LanceVectorStore {
     }
   }
 
-  async optimize(): Promise<void> {
+  /**
+   * Compact fragments and prune old Lance versions.
+   * Defaults reclaim aggressively (cleanupOlderThan=now, deleteUnverified=true).
+   * Must only run while no concurrent writers — enforced by mutation lock.
+   */
+  async optimize(options: OptimizeOptions = {}): Promise<OptimizeStats | null> {
+    return this.withMutationLock(() => this.optimizeUnlocked(options));
+  }
+
+  private async optimizeUnlocked(options: OptimizeOptions = {}): Promise<OptimizeStats | null> {
     const table = await this.getTable();
-    if (!table) return;
+    if (!table) return null;
+    // Capture at call entry so the version produced by this compact is never pruned.
+    const cleanupOlderThan = options.cleanupOlderThan ?? new Date();
+    const deleteUnverified = options.deleteUnverified ?? true;
     try {
-      await table.optimize();
+      const stats = await table.optimize({ cleanupOlderThan, deleteUnverified });
+      console.info("Local Smart Lookup optimize", stats);
+      return stats ?? null;
     } catch (error) {
       console.error("Local Smart Lookup optimize failed", error);
+      return null;
     }
+  }
+
+  /**
+   * Multi-pass compact until on-disk size stabilizes (or maxPasses).
+   * When free disk is too low for peak rewrite during optimize(), falls back to
+   * exporting live rows into a fresh table (no re-embed).
+   */
+  async compactUntilStable(maxPasses = 3): Promise<CompactResult> {
+    return this.withMutationLock(async () => {
+      const beforeBytes = await sumDirectoryBytes(this.absoluteDbPath());
+      // Compaction writes new live fragments before pruning old ones, so free
+      // space must cover roughly the current on-disk size (peak ≈ old + live).
+      const free = freeBytesAvailable(this.absoluteDbPath());
+      if (free != null && beforeBytes > 0 && free < beforeBytes) {
+        console.info(
+          `Local Smart Lookup: only ${formatBytes(free)} free vs ${formatBytes(beforeBytes)} index; rewriting live rows into a fresh table.`
+        );
+        await this.rewriteLiveTableUnlocked();
+        const afterBytes = await sumDirectoryBytes(this.absoluteDbPath());
+        return {
+          beforeBytes,
+          afterBytes,
+          passes: 1,
+          bytesRemovedReported: Math.max(0, beforeBytes - afterBytes),
+          versionsRemovedReported: 0
+        };
+      }
+
+      let afterBytes = beforeBytes;
+      let bytesRemovedReported = 0;
+      let versionsRemovedReported = 0;
+      let passes = 0;
+
+      for (let i = 0; i < maxPasses; i++) {
+        passes = i + 1;
+        const stats = await this.optimizeUnlocked({
+          cleanupOlderThan: new Date(),
+          deleteUnverified: true
+        });
+        bytesRemovedReported += Number(stats?.prune?.bytesRemoved ?? 0);
+        versionsRemovedReported += Number(stats?.prune?.oldVersionsRemoved ?? 0);
+        const next = await sumDirectoryBytes(this.absoluteDbPath());
+        // Stabilized within 2% (or grew — stop).
+        if (afterBytes > 0 && next >= afterBytes * 0.98) {
+          afterBytes = next;
+          break;
+        }
+        afterBytes = next;
+      }
+
+      // Refresh FTS after fragment rewrite.
+      this.lexicalIndexReady = false;
+      await this.ensureLexicalIndexUnlocked(true);
+
+      return {
+        beforeBytes,
+        afterBytes,
+        passes,
+        bytesRemovedReported,
+        versionsRemovedReported
+      };
+    });
+  }
+
+  /**
+   * Export live rows → write fresh Lance table beside the old one → swap dirs.
+   * Used when there is not enough free disk for optimize()'s peak rewrite.
+   */
+  private async rewriteLiveTableUnlocked(): Promise<void> {
+    const table = await this.getTable();
+    if (!table) return;
+
+    const rawRows = await table.query().toArray();
+    const rows: Record<string, unknown>[] = [];
+    for (const raw of rawRows) {
+      const normalized = normalizeStorageRow(raw);
+      if (normalized) rows.push(normalized);
+    }
+
+    const absDb = this.absoluteDbPath();
+    const absTmp = `${absDb}.rewrite-tmp`;
+    await fsp.rm(absTmp, { recursive: true, force: true });
+    await fsp.mkdir(absTmp, { recursive: true });
+
+    const lancedb = this.loadLanceDb();
+    const tmpConnection = await lancedb.connect(absTmp);
+    try {
+      if (rows.length > 0) {
+        const tmpTable = await tmpConnection.createTable(this.tableName, rows);
+        tmpTable.close();
+      }
+    } finally {
+      tmpConnection.close();
+    }
+
+    this.table?.close();
+    this.table = null;
+    this.connection?.close();
+    this.connection = null;
+    this.lexicalIndexReady = false;
+
+    await fsp.rm(absDb, { recursive: true, force: true });
+    await fsp.rename(absTmp, absDb);
+
+    await this.ensureConnection();
+    if (rows.length > 0) {
+      await this.ensureLexicalIndexUnlocked(true);
+    }
+  }
+
+  /** Delete the entire LanceDB directory and meta; caller should re-enqueue the vault. */
+  async wipeIndex(): Promise<void> {
+    return this.withMutationLock(async () => {
+      this.table?.close();
+      this.table = null;
+      this.connection?.close();
+      this.connection = null;
+      this.lexicalIndexReady = false;
+
+      const abs = this.absoluteDbPath();
+      await fsp.rm(abs, { recursive: true, force: true });
+      if (await this.adapter.exists(this.metaPath)) {
+        await this.adapter.remove(this.metaPath);
+      }
+      await this.ensureConnection();
+    });
   }
 
   private async ensureSchemaCurrent(): Promise<void> {
@@ -961,7 +1249,7 @@ export class LanceVectorStore {
     return this.table;
   }
 
-  private async deletePath(path: string): Promise<void> {
+  private async deletePathUnlocked(path: string): Promise<void> {
     const table = await this.getTable();
     if (!table) return;
     await table.delete(pathWhere(path));

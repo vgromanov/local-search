@@ -139,6 +139,19 @@ Search body:
 
 `tags`, `frontmatter`, and `where` are applied through LanceDB metadata filtering. Dataview remains optional for richer vault-specific filters.
 
+## Index maintenance
+
+LanceDB is append-only: incremental note updates accumulate old versions and fragments.
+The plugin runs an aggressive `optimize` (prune versions older than now) whenever the
+index queue drains. For a bloated on-disk folder:
+
+- **Compact index now** (command / settings) — in-place reclaim; search may slow while it runs.
+  If free disk is too low for Lance `optimize` peak rewrite, compact exports live rows into a
+  fresh table (no re-embedding) and swaps directories.
+- **Wipe index and reindex** (settings, with confirm) — deletes `lancedb/` and re-embeds the vault (can take hours). Prefer Compact unless the index is corrupted.
+
+Wipe is not exposed over REST.
+
 ## Development
 
 ```bash
