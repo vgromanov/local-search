@@ -100,6 +100,8 @@ When a REST API plugin with extension support is enabled, routes are registered 
 - `POST /local-smart-lookup/search/`
 - `POST /local-smart-lookup/reindex/`
 - `GET /local-smart-lookup/status/`
+- `GET /frontmatter_keys/`
+- `GET /frontmatter_keys/:name/`
 - `GET /si/health/`
 - `GET /si/index_info/`
 - `POST /si/embed_text/`
@@ -108,6 +110,39 @@ When a REST API plugin with extension support is enabled, routes are registered 
 - `POST /si/count_neighbors/`
 - `POST /si/get_vectors/`
 - `POST /si/filter/validate/`
+
+### Frontmatter keys (Properties hygiene)
+
+Read-only vault property inventory (not under `/si/*`). Uses Obsidian
+`metadataCache` + Properties type manager when available so results match the
+Properties pane even if the LanceDB index is stale or offline. Trailing slash;
+Local REST bearer auth.
+
+**Inventory** — `GET /frontmatter_keys/`
+
+```json
+[
+  { "name": "workspace", "count": 1733, "type": "text" },
+  { "name": "tags", "count": 2406, "type": "multitext" }
+]
+```
+
+- `name`: YAML frontmatter / Obsidian Properties key
+- `count`: note count (not chunk count)
+- `type`: assigned Properties type when known, else inferred from a sample value
+- Sort: descending `count`, then `name` ascending
+- Empty vault / no properties → `[]`
+
+**Files by key** — `GET /frontmatter_keys/:name/`
+
+Returns `[{ "filename": "path/note.md" }, …]` for notes that set that property.
+URL-decode `:name`. Unknown / unused key → `[]` (not 404).
+
+Smoke (requires Local REST + `OBSIDIAN_API_KEY`):
+
+```bash
+./scripts/smoke_frontmatter_keys.sh
+```
 
 Semantic Index (`/si/*`) routes use trailing slashes and the Local REST bearer token.
 They are **read-only**, **never rerank**, and use cosine **distance** thresholds

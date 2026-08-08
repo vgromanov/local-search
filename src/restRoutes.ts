@@ -4,6 +4,10 @@ import {
   compileFilter,
   normalizeKeysetPage
 } from "./filterCompiler";
+import {
+  listFrontmatterKeyFilesFromVault,
+  listFrontmatterKeysFromVault
+} from "./frontmatterKeys";
 import { l2Normalize } from "./modelClient";
 import { QUERYABLE_FIELDS, SCHEMA_VER } from "./schema";
 import type { ObsidianRestPublicApi } from "./types";
@@ -565,6 +569,49 @@ function registerSiRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
     });
 }
 
+function readRouteParam(req: unknown, name: string): string {
+  const request = req as {
+    params?: Record<string, unknown>;
+    param?: (key: string) => unknown;
+  };
+  const fromParams = request.params?.[name];
+  if (typeof fromParams === "string") return fromParams;
+  if (typeof request.param === "function") {
+    const value = request.param(name);
+    if (typeof value === "string") return value;
+  }
+  return "";
+}
+
+function registerFrontmatterKeyRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
+  // Properties hygiene (vault metadata UX) — not under /si/* (SI = LanceDB mining).
+  api.addRoute("/frontmatter_keys/")
+    .get?.(async (_req, res) => {
+      try {
+        sendJson(api, res, listFrontmatterKeysFromVault(plugin.app));
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+
+  // Unknown / unused key → empty list (not 404), matching agent-friendly tag tooling.
+  api.addRoute("/frontmatter_keys/:name/")
+    .get?.(async (req, res) => {
+      try {
+        const raw = readRouteParam(req, "name");
+        let name = raw;
+        try {
+          name = decodeURIComponent(raw);
+        } catch {
+          name = raw;
+        }
+        sendJson(api, res, listFrontmatterKeyFilesFromVault(plugin.app, name));
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+}
+
 export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void) | null {
   const api = getRestApi(plugin);
   if (!api) return null;
@@ -617,6 +664,7 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void)
       }
     });
 
+  registerFrontmatterKeyRoutes(plugin, api);
   registerSiRoutes(plugin, api);
 
   return () => api.unregister?.();
