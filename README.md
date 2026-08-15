@@ -174,6 +174,11 @@ Search body:
 
 `tags`, `frontmatter`, and `where` are applied through LanceDB metadata filtering. Dataview remains optional for richer vault-specific filters.
 
+**Dataview filters:** prefer `dataviewQuery` (full `LIST`/`TABLE`/`TASK`/`CALENDAR`).
+`dataviewSource` is a backward-compatible alias: bare sources such as `#tag` or
+`"Folder"` are wrapped as `LIST FROM …` and executed via Dataview `api.query`
+(never `api.pages()`). Both fields share the same safe query path.
+
 ## Index maintenance
 
 LanceDB is append-only: incremental note updates accumulate old versions and fragments.

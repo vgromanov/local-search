@@ -1,4 +1,5 @@
 import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
+import { isDataviewQuery } from "./dataview";
 import type { SearchResult } from "./types";
 import type LocalSmartLookupPlugin from "./main";
 
@@ -14,10 +15,6 @@ function formatScore(result: SearchResult): string {
     return `rrf ${result.fusedScore.toFixed(4)}${detail}`;
   }
   return `score ${(result.rerankScore ?? result.score).toFixed(3)}`;
-}
-
-function isDataviewQuery(value: string): boolean {
-  return /^(LIST|TABLE|TASK|CALENDAR)\b/i.test(value.trim());
 }
 
 export class LocalSmartLookupView extends ItemView {
