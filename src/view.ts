@@ -1,6 +1,6 @@
 import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
 import { isDataviewQuery } from "./dataview";
-import type { SearchResult } from "./types";
+import type { DegradedLeg, SearchResult } from "./types";
 import type LocalSmartLookupPlugin from "./main";
 
 export const VIEW_TYPE_LOCAL_SMART_LOOKUP = "local-smart-lookup-view";
@@ -111,21 +111,27 @@ export class LocalSmartLookupView extends ItemView {
     try {
       this.renderEmpty("Searching...");
       const dataviewFilter = this.dataviewInput.value.trim();
-      const results = await this.plugin.searchService.search(query, {
+      const { results, degraded } = await this.plugin.searchService.search(query, {
         dataviewSource: dataviewFilter && !isDataviewQuery(dataviewFilter) ? dataviewFilter : undefined,
         dataviewQuery: isDataviewQuery(dataviewFilter) ? dataviewFilter : undefined
       });
-      this.renderResults(results);
+      this.renderResults(results, degraded);
     } catch (error) {
       new Notice(`Search failed: ${error instanceof Error ? error.message : String(error)}`);
       this.renderEmpty("Search failed. Check your local model server and index status.");
     }
   }
 
-  private renderResults(results: SearchResult[]): void {
+  private renderResults(results: SearchResult[], degraded: DegradedLeg[] = []): void {
     this.resultsEl.empty();
+    if (degraded.length > 0) {
+      this.resultsEl.createDiv({
+        cls: "local-smart-lookup-empty",
+        text: `Degraded search: ${degraded.join(", ")} unavailable. Results use the remaining signals.`
+      });
+    }
     if (results.length === 0) {
-      this.renderEmpty("No semantic matches found.");
+      this.resultsEl.createDiv({ cls: "local-smart-lookup-empty", text: "No semantic matches found." });
       return;
     }
 

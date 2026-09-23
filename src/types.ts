@@ -19,6 +19,10 @@ export interface LocalSmartLookupSettings {
   rrfWeightRerank: number;
   rrfWeightVector: number;
   rrfWeightLexical: number;
+  /** Prefix prepended to the query (never documents) before embedding; "" disables. */
+  queryInstruction: string;
+  /** Return at most one result (best chunk) per note unless a request overrides it. */
+  collapseByNote: boolean;
 }
 
 export interface VaultChunk {
@@ -69,6 +73,18 @@ export interface SearchOptions {
   where?: string;
   tags?: string[];
   frontmatter?: Record<string, string | number | boolean>;
+  /** Per-request override of `collapseByNote`. */
+  collapse?: boolean;
+  /** Per-request override of the `queryInstruction` setting ("" disables). */
+  queryInstruction?: string;
+}
+
+/** Retrieval legs that failed and were skipped for a search. */
+export type DegradedLeg = "vector" | "lexical" | "rerank";
+
+export interface SearchResponse {
+  results: SearchResult[];
+  degraded: DegradedLeg[];
 }
 
 export interface SearchResult extends VaultChunk {
@@ -80,6 +96,8 @@ export interface SearchResult extends VaultChunk {
   vectorRank?: number;
   lexicalRank?: number;
   rerankRank?: number;
+  /** Candidate chunks from this note merged into this result when collapsing by note. */
+  matchedChunks?: number;
   tags?: string[];
   frontmatter?: Record<string, unknown>;
   title?: string;

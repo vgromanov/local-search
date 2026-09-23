@@ -21,7 +21,9 @@ export const DEFAULT_SETTINGS: LocalSmartLookupSettings = {
   rrfK: 60,
   rrfWeightRerank: 1,
   rrfWeightVector: 0.6,
-  rrfWeightLexical: 0.4
+  rrfWeightLexical: 0.4,
+  queryInstruction: "Instruct: Given a question, retrieve vault notes that answer it\nQuery: ",
+  collapseByNote: true
 };
 
 function numberSetting(value: string, fallback: number, min: number): number {
@@ -203,6 +205,27 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
         .setValue(String(this.plugin.settings.rerankPoolSize))
         .onChange(async (value) => {
           this.plugin.settings.rerankPoolSize = Math.round(numberSetting(value, DEFAULT_SETTINGS.rerankPoolSize, 1));
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Query instruction")
+      .setDesc("Prefix added to search queries (not documents) before embedding, for instruction-aware models such as Qwen3-Embedding. Leave empty for models like nomic-embed-text. Changing it needs no reindex.")
+      .addTextArea((text) => text
+        .setPlaceholder("Instruct: <task>\\nQuery: ")
+        .setValue(this.plugin.settings.queryInstruction)
+        .onChange(async (value) => {
+          this.plugin.settings.queryInstruction = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("One result per note")
+      .setDesc("Collapse chunk hits to the best chunk per note. Requests can override with collapse: false.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.collapseByNote)
+        .onChange(async (value) => {
+          this.plugin.settings.collapseByNote = value;
           await this.plugin.saveSettings();
         }));
 

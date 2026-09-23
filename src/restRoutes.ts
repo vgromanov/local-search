@@ -637,15 +637,19 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void)
         const frontmatter = body.frontmatter && typeof body.frontmatter === "object" && !Array.isArray(body.frontmatter)
           ? body.frontmatter as Record<string, string | number | boolean>
           : undefined;
-        const results = await plugin.searchService.search(query, {
+        const collapse = typeof body.collapse === "boolean" ? body.collapse : undefined;
+        const queryInstruction = typeof body.queryInstruction === "string" ? body.queryInstruction : undefined;
+        const { results, degraded } = await plugin.searchService.search(query, {
           limit,
           dataviewSource,
           dataviewQuery,
           where,
           tags,
-          frontmatter
+          frontmatter,
+          collapse,
+          queryInstruction
         });
-        sendJson(api, res, { results });
+        sendJson(api, res, { results, degraded });
       } catch (error) {
         sendError(api, res, 500, error);
       }
