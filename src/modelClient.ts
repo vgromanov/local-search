@@ -77,7 +77,7 @@ export class LocalModelClient {
 
     const raw = response.json as { results?: RerankItem[] } | RerankItem[];
     const items = Array.isArray(raw) ? raw : raw.results;
-    if (!Array.isArray(items)) return results;
+    if (!Array.isArray(items)) throw new Error("Rerank response did not include results.");
 
     const byIndex = new Map<number, number>();
     items.forEach((item, fallbackIndex) => {
