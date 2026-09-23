@@ -19,6 +19,8 @@ export interface LocalSmartLookupSettings {
   rrfWeightRerank: number;
   rrfWeightVector: number;
   rrfWeightLexical: number;
+  /** Truncate each document sent to the reranker to this many characters; 0 = full chunk. */
+  rerankMaxChars: number;
   /** Prefix prepended to the query (never documents) before embedding; "" disables. */
   queryInstruction: string;
   /** Return at most one result (best chunk) per note unless a request overrides it. */
@@ -77,6 +79,10 @@ export interface SearchOptions {
   collapse?: boolean;
   /** Per-request override of the `queryInstruction` setting ("" disables). */
   queryInstruction?: string;
+  /** Per-request rerank pool; can only lower the `rerankPoolSize` setting. */
+  rerankPoolSize?: number;
+  /** Per-request document truncation for the reranker; can only tighten the setting. */
+  rerankMaxChars?: number;
 }
 
 /** Retrieval legs that failed and were skipped for a search. */

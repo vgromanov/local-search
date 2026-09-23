@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: LocalSmartLookupSettings = {
   rrfWeightRerank: 1,
   rrfWeightVector: 0.6,
   rrfWeightLexical: 0.4,
+  rerankMaxChars: 0,
   queryInstruction: "Instruct: Given a question, retrieve vault notes that answer it\nQuery: ",
   collapseByNote: true
 };
@@ -205,6 +206,17 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
         .setValue(String(this.plugin.settings.rerankPoolSize))
         .onChange(async (value) => {
           this.plugin.settings.rerankPoolSize = Math.round(numberSetting(value, DEFAULT_SETTINGS.rerankPoolSize, 1));
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Rerank document length")
+      .setDesc("Characters of each candidate chunk sent to the cross-encoder (0 = whole chunk). Lower values cut reranker memory and latency on causal-LM rerankers such as Qwen3-Reranker.")
+      .addText((text) => text
+        .setPlaceholder("0")
+        .setValue(String(this.plugin.settings.rerankMaxChars))
+        .onChange(async (value) => {
+          this.plugin.settings.rerankMaxChars = Math.round(numberSetting(value, DEFAULT_SETTINGS.rerankMaxChars, 0));
           await this.plugin.saveSettings();
         }));
 

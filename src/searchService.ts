@@ -42,7 +42,9 @@ export class SearchService {
         limit,
         legOptions,
         collapse: options.collapse,
-        queryInstruction: options.queryInstruction
+        queryInstruction: options.queryInstruction,
+        rerankPoolSize: options.rerankPoolSize,
+        rerankMaxChars: options.rerankMaxChars
       },
       settings,
       {
@@ -55,7 +57,7 @@ export class SearchService {
         },
         vectorSearch: (vector, opts) => this.store.search(vector, opts),
         lexicalSearch: (text, opts) => this.store.searchLexical(text, opts),
-        rerank: (text, candidates) => this.modelClient.rerank(text, candidates)
+        rerank: (text, candidates, rerankOptions) => this.modelClient.rerank(text, candidates, rerankOptions)
       },
       (leg, error) => console.warn(`Local Smart Lookup: ${leg} leg unavailable, degrading search.`, error)
     );

@@ -639,6 +639,8 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void)
           : undefined;
         const collapse = typeof body.collapse === "boolean" ? body.collapse : undefined;
         const queryInstruction = typeof body.queryInstruction === "string" ? body.queryInstruction : undefined;
+        const rerankPoolSize = typeof body.rerankPoolSize === "number" ? body.rerankPoolSize : undefined;
+        const rerankMaxChars = typeof body.rerankMaxChars === "number" ? body.rerankMaxChars : undefined;
         const { results, degraded } = await plugin.searchService.search(query, {
           limit,
           dataviewSource,
@@ -647,7 +649,9 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void)
           tags,
           frontmatter,
           collapse,
-          queryInstruction
+          queryInstruction,
+          rerankPoolSize,
+          rerankMaxChars
         });
         sendJson(api, res, { results, degraded });
       } catch (error) {
