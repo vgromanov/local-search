@@ -14,6 +14,7 @@ export type PipelineSettings = Pick<
   | "useRerank"
   | "rerankModel"
   | "rerankPoolSize"
+  | "rerankMaxChars"
   | "rrfK"
   | "rrfWeightRerank"
   | "rrfWeightVector"
@@ -27,7 +28,12 @@ export interface SearchLegs {
   embed(text: string): Promise<number[]>;
   vectorSearch(vector: number[], options: SearchOptions): Promise<SearchResult[]>;
   lexicalSearch(query: string, options: SearchOptions): Promise<SearchResult[]>;
-  rerank(query: string, candidates: SearchResult[]): Promise<SearchResult[]>;
+  rerank(query: string, candidates: SearchResult[], options?: RerankOptions): Promise<SearchResult[]>;
+}
+
+export interface RerankOptions {
+  /** Truncate each document sent to the reranker; returned results keep their full text. */
+  maxChars?: number;
 }
 
 export interface PipelineRequest {
@@ -37,6 +43,32 @@ export interface PipelineRequest {
   legOptions: SearchOptions;
   collapse?: boolean;
   queryInstruction?: string;
+  rerankPoolSize?: number;
+  rerankMaxChars?: number;
+}
+
+/** Document text for the cross-encoder; a positive `maxChars` truncates it. */
+export function rerankDocument(text: string, maxChars?: number): string {
+  return maxChars && maxChars > 0 && text.length > maxChars ? text.slice(0, maxChars) : text;
+}
+
+/**
+ * Request overrides may only make reranking cheaper than the settings allow:
+ * a smaller pool (never below `limit`) and a tighter document cap.
+ */
+export function effectiveRerankBudget(
+  request: Pick<PipelineRequest, "limit" | "rerankPoolSize" | "rerankMaxChars">,
+  settings: Pick<PipelineSettings, "rerankPoolSize" | "rerankMaxChars">
+): { poolSize: number; maxChars: number } {
+  const positive = (n: number | undefined) => typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+  const requestedPool = positive(request.rerankPoolSize);
+  const pool = requestedPool === undefined ? settings.rerankPoolSize : Math.min(settings.rerankPoolSize, requestedPool);
+  const caps = [positive(settings.rerankMaxChars), positive(request.rerankMaxChars)]
+    .filter((n): n is number => n !== undefined);
+  return {
+    poolSize: Math.max(request.limit, pool),
+    maxChars: caps.length ? Math.min(...caps) : 0
+  };
 }
 
 /**
@@ -109,7 +141,7 @@ export async function runHybridSearch(
   const vectorRanks = assignRanks(candidates, (r) => r.score, (r) => r.distance !== undefined);
   const lexicalRanks = assignRanks(candidates, (r) => r.ftsScore, (r) => r.ftsScore !== undefined);
 
-  const poolSize = Math.max(limit, settings.rerankPoolSize);
+  const { poolSize, maxChars } = effectiveRerankBudget(request, settings);
   if (candidates.length > poolSize) {
     const preRank = (r: SearchResult) => rrf([
       [lexicalRanks.get(r.id), settings.rrfWeightLexical],
@@ -123,7 +155,7 @@ export async function runHybridSearch(
   let reranked = candidates;
   if (settings.useRerank && settings.rerankModel && candidates.length > 0) {
     try {
-      reranked = await legs.rerank(query, candidates);
+      reranked = await legs.rerank(query, candidates, maxChars > 0 ? { maxChars } : undefined);
     } catch (error) {
       markDegraded("rerank", error);
     }

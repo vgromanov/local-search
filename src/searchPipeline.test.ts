@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 import {
   applyQueryInstruction,
   collapseByNote,
+  effectiveRerankBudget,
+  rerankDocument,
   runHybridSearch,
   type PipelineSettings,
   type SearchLegs
@@ -15,6 +17,7 @@ const SETTINGS: PipelineSettings = {
   useRerank: true,
   rerankModel: "qwen3-reranker",
   rerankPoolSize: 50,
+  rerankMaxChars: 0,
   rrfK: 60,
   rrfWeightRerank: 1,
   rrfWeightVector: 0.6,
@@ -244,5 +247,63 @@ describe("collapse by note", () => {
     );
     assert.equal(results.filter((r) => r.path === "a.md").length, 2);
     assert.ok(results.every((r) => r.matchedChunks === undefined));
+  });
+});
+
+describe("rerank budget", () => {
+  it("request can lower but never raise the pool, and never below limit", () => {
+    const settings = { rerankPoolSize: 50, rerankMaxChars: 0 };
+    assert.equal(effectiveRerankBudget({ limit: 10 }, settings).poolSize, 50);
+    assert.equal(effectiveRerankBudget({ limit: 10, rerankPoolSize: 20 }, settings).poolSize, 20);
+    assert.equal(effectiveRerankBudget({ limit: 10, rerankPoolSize: 200 }, settings).poolSize, 50);
+    assert.equal(effectiveRerankBudget({ limit: 10, rerankPoolSize: 3 }, settings).poolSize, 10);
+    assert.equal(effectiveRerankBudget({ limit: 10, rerankPoolSize: 0 }, settings).poolSize, 50);
+  });
+
+  it("uses the tighter of the setting and request document caps", () => {
+    assert.equal(effectiveRerankBudget({ limit: 5 }, { rerankPoolSize: 50, rerankMaxChars: 0 }).maxChars, 0);
+    assert.equal(effectiveRerankBudget({ limit: 5, rerankMaxChars: 600 }, { rerankPoolSize: 50, rerankMaxChars: 0 }).maxChars, 600);
+    assert.equal(effectiveRerankBudget({ limit: 5, rerankMaxChars: 900 }, { rerankPoolSize: 50, rerankMaxChars: 400 }).maxChars, 400);
+    assert.equal(effectiveRerankBudget({ limit: 5 }, { rerankPoolSize: 50, rerankMaxChars: 400 }).maxChars, 400);
+  });
+
+  it("truncates only positive caps", () => {
+    assert.equal(rerankDocument("abcdef", 3), "abc");
+    assert.equal(rerankDocument("abcdef", 0), "abcdef");
+    assert.equal(rerankDocument("abc", 10), "abc");
+  });
+
+  it("sends at most the request pool to the reranker with the document cap", async () => {
+    let seen = 0;
+    let options: { maxChars?: number } | undefined;
+    const many = Array.from({ length: 30 }, (_, i) => vectorHit(`n${i}.md`, 0, 1 - i / 100));
+    const { results } = await runHybridSearch(
+      { ...request(), limit: 5, rerankPoolSize: 8, rerankMaxChars: 100 },
+      SETTINGS,
+      legs({
+        vectorSearch: async () => many,
+        lexicalSearch: async () => [],
+        rerank: async (_q, c, o) => {
+          seen = c.length;
+          options = o;
+          return c.map((r) => ({ ...r, rerankScore: 0.5 }));
+        }
+      })
+    );
+    assert.equal(seen, 8);
+    assert.deepEqual(options, { maxChars: 100 });
+    assert.equal(results.length, 5);
+    assert.ok(results.every((r) => r.text.startsWith("n")));
+  });
+
+  it("passes no rerank options by default", async () => {
+    let options: unknown = "unset";
+    await runHybridSearch(request(), SETTINGS, legs({
+      rerank: async (_q, c, o) => {
+        options = o;
+        return c;
+      }
+    }));
+    assert.equal(options, undefined);
   });
 });

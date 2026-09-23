@@ -1,4 +1,5 @@
 import { requestUrl } from "obsidian";
+import { rerankDocument, type RerankOptions } from "./searchPipeline";
 import type { LocalSmartLookupSettings, SearchResult } from "./types";
 
 type EmbeddingResponse = {
@@ -58,7 +59,7 @@ export class LocalModelClient {
     throw new Error("Embedding response did not include vectors.");
   }
 
-  async rerank(query: string, results: SearchResult[]): Promise<SearchResult[]> {
+  async rerank(query: string, results: SearchResult[], options: RerankOptions = {}): Promise<SearchResult[]> {
     const settings = this.getSettings();
     if (!settings.useRerank || !settings.rerankModel || results.length === 0) {
       return results;
@@ -71,7 +72,7 @@ export class LocalModelClient {
       body: JSON.stringify({
         model: settings.rerankModel,
         query,
-        documents: results.map((result) => result.text)
+        documents: results.map((result) => rerankDocument(result.text, options.maxChars))
       })
     });
 

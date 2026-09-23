@@ -44,6 +44,16 @@ For reranking, configure a local endpoint that accepts:
 
 and returns either `results: [{ index, relevance_score }]` or an array of scored results.
 
+Each search sends up to `rerankPoolSize` (default 50) candidate chunks in one
+rerank request. Causal-LM rerankers such as Qwen3-Reranker on oMLX run one
+forward pass per document and materialize full-vocabulary logits for every
+token. Their memory therefore scales with pool size × chunk length. MLX keeps
+those freed buffers cached, so a burst of searches (for example a benchmark
+run) can ratchet server memory up. To bound it, lower `rerankPoolSize`, or set
+`rerankMaxChars` (0 = whole chunk) to truncate only the text sent to the
+reranker. Searches can pass `rerankPoolSize` / `rerankMaxChars` per request,
+but those can only lower the settings, never raise them.
+
 ## Index storage
 
 The local index lives at:
