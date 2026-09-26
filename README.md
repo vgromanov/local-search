@@ -191,6 +191,14 @@ Search body:
 
 ## Index maintenance
 
+After upgrading to the paragraph-coverage fix (`markdown-body-v2`), run
+**Local Smart Lookup: Index vault for Local Smart Lookup** once to repair existing
+indexed notes. The changed chunking version forces unchanged notes to be
+rechunked and re-embedded, restoring text omitted at paragraph boundaries.
+Reload the plugin/app before starting the reindex; a reload alone does not
+rebuild existing chunks. The persistent queue processes the vault in the
+background, and progress is available at `/local-smart-lookup/status/`.
+
 LanceDB is append-only: incremental note updates accumulate old versions and fragments.
 The plugin runs an aggressive `optimize` (prune versions older than now) whenever the
 index queue drains. For a bloated on-disk folder:

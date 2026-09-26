@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { CHUNKING_VERSION, chunkText } from "./chunking";
 import { Notice, TFile } from "obsidian";
 import type { App, CachedMetadata } from "obsidian";
 import { LocalModelClient } from "./modelClient";
@@ -8,7 +9,7 @@ import {
   resolveDateBucket,
   resolveNoteUuid
 } from "./schema";
-import type { LocalSmartLookupSettings, VaultChunk, VectorRecord } from "./types";
+import type { LocalSmartLookupSettings, VectorRecord } from "./types";
 import type { IndexDecision } from "./vectorStore";
 import { LanceVectorStore } from "./vectorStore";
 
@@ -101,44 +102,6 @@ function valueAsString(value: unknown): string {
   if (Array.isArray(value)) return value.map(valueAsString).filter(Boolean).join(", ");
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
-}
-
-function chunkText(file: TFile, body: string, metadata: PreparedDocument["metadata"], chunkSize: number, overlap: number): VaultChunk[] {
-  const clean = body.replace(/\r\n/g, "\n").trim();
-  if (!clean) return [];
-
-  const chunks: VaultChunk[] = [];
-  const step = Math.max(1, chunkSize - overlap);
-  let start = 0;
-  let position = 0;
-
-  while (start < clean.length) {
-    const end = Math.min(clean.length, start + chunkSize);
-    let sliceEnd = end;
-    if (end < clean.length) {
-      const paragraphBreak = clean.lastIndexOf("\n\n", end);
-      if (paragraphBreak > start + chunkSize * 0.5) {
-        sliceEnd = paragraphBreak;
-      }
-    }
-    const chunk = clean.slice(start, sliceEnd).trim();
-    if (chunk) {
-      chunks.push({
-        id: `${file.path}#${metadata.bodyHash.slice(0, 12)}#${position}`,
-        path: file.path,
-        folder: metadata.folder,
-        basename: file.basename,
-        mtime: file.stat.mtime,
-        size: file.stat.size,
-        position,
-        text: chunk
-      });
-      position++;
-    }
-    start = sliceEnd >= clean.length ? clean.length : Math.max(sliceEnd - overlap, start + step);
-  }
-
-  return chunks;
 }
 
 export class VaultIndexer {
@@ -239,7 +202,7 @@ export class VaultIndexer {
     const chunkingConfigHash = hash(JSON.stringify({
       chunkSize: settings.chunkSize,
       chunkOverlap: settings.chunkOverlap,
-      indexedBody: "markdown-body-v1"
+      indexedBody: CHUNKING_VERSION
     }));
 
     const metadata: PreparedDocument["metadata"] = {
