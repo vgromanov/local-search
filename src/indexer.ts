@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { chunkingConfigHash, splitMarkdownBody } from "./chunking";
 import { Notice, TFile } from "obsidian";
 import type { App, CachedMetadata } from "obsidian";
 import { LocalModelClient } from "./modelClient";
@@ -104,41 +105,16 @@ function valueAsString(value: unknown): string {
 }
 
 function chunkText(file: TFile, body: string, metadata: PreparedDocument["metadata"], chunkSize: number, overlap: number): VaultChunk[] {
-  const clean = body.replace(/\r\n/g, "\n").trim();
-  if (!clean) return [];
-
-  const chunks: VaultChunk[] = [];
-  const step = Math.max(1, chunkSize - overlap);
-  let start = 0;
-  let position = 0;
-
-  while (start < clean.length) {
-    const end = Math.min(clean.length, start + chunkSize);
-    let sliceEnd = end;
-    if (end < clean.length) {
-      const paragraphBreak = clean.lastIndexOf("\n\n", end);
-      if (paragraphBreak > start + chunkSize * 0.5) {
-        sliceEnd = paragraphBreak;
-      }
-    }
-    const chunk = clean.slice(start, sliceEnd).trim();
-    if (chunk) {
-      chunks.push({
-        id: `${file.path}#${metadata.bodyHash.slice(0, 12)}#${position}`,
-        path: file.path,
-        folder: metadata.folder,
-        basename: file.basename,
-        mtime: file.stat.mtime,
-        size: file.stat.size,
-        position,
-        text: chunk
-      });
-      position++;
-    }
-    start = sliceEnd >= clean.length ? clean.length : Math.max(sliceEnd - overlap, start + step);
-  }
-
-  return chunks;
+  return splitMarkdownBody(body, chunkSize, overlap).map((text, position) => ({
+    id: `${file.path}#${metadata.bodyHash.slice(0, 12)}#${position}`,
+    path: file.path,
+    folder: metadata.folder,
+    basename: file.basename,
+    mtime: file.stat.mtime,
+    size: file.stat.size,
+    position,
+    text
+  }));
 }
 
 export class VaultIndexer {
@@ -236,11 +212,7 @@ export class VaultIndexer {
     const tags = unique([...frontmatterTags, ...inlineTags]);
     const aliases = unique(stringList(frontmatter.aliases ?? frontmatter.alias));
     const frontmatterKeys = Object.keys(frontmatter).sort((a, b) => a.localeCompare(b));
-    const chunkingConfigHash = hash(JSON.stringify({
-      chunkSize: settings.chunkSize,
-      chunkOverlap: settings.chunkOverlap,
-      indexedBody: "markdown-body-v1"
-    }));
+    const configHash = chunkingConfigHash(settings.chunkSize, settings.chunkOverlap);
 
     const metadata: PreparedDocument["metadata"] = {
       path: file.path,
@@ -251,7 +223,7 @@ export class VaultIndexer {
       contentHash: hash(content),
       bodyHash: hash(body),
       frontmatterHash: hash(rawFrontmatter || stableJson(frontmatter)),
-      chunkingConfigHash,
+      chunkingConfigHash: configHash,
       embeddingModel: settings.embeddingModel,
       embeddingDim: 0,
       indexedAt: new Date().toISOString(),
@@ -279,7 +251,7 @@ export class VaultIndexer {
       contentHash: metadata.contentHash,
       bodyHash: metadata.bodyHash,
       frontmatterHash: metadata.frontmatterHash,
-      chunkingConfigHash,
+      chunkingConfigHash: configHash,
       embeddingModel: settings.embeddingModel,
       metadata
     };
