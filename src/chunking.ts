@@ -36,8 +36,11 @@ export function chunkText(file: TFile, body: string, metadata: Pick<VectorRecord
       position++;
     }
     // Advance from the actual boundary, not the full-window step: paragraph
-    // shortening must never leave a gap. Always progress even with oversized overlap.
-    start = sliceEnd >= clean.length ? clean.length : Math.max(sliceEnd - overlap, start + 1);
+    // shortening must never leave a gap. If overlap would prevent progress,
+    // continue at the boundary instead of emitting near-duplicates one character apart.
+    const desired = sliceEnd - overlap;
+    const next = desired > start ? desired : sliceEnd;
+    start = sliceEnd >= clean.length ? clean.length : Math.max(next, start + 1);
   }
 
   return chunks;

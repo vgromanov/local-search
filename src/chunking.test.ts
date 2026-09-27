@@ -31,6 +31,7 @@ function assertCoverage(body: string, size: number, overlap: number) {
   for (let i = 0; i < source.length; i++) {
     if (/\S/u.test(source[i])) assert.ok(covered.has(i), `uncovered source character at ${i}`);
   }
+  return chunks;
 }
 
 describe("chunkText source coverage", () => {
@@ -47,7 +48,8 @@ describe("chunkText source coverage", () => {
       Array.from({ length }, (_, i) => String.fromCharCode(0xE000 + paragraph * 1200 + i)).join(""));
     const body = paragraphs.join("\n\n");
     for (const overlap of [0, 180, 700, 1200, 1500]) {
-      assertCoverage(body, 1200, overlap);
+      const chunks = assertCoverage(body, 1200, overlap);
+      assert.ok(chunks.length < 40, `overlap ${overlap} produced ${chunks.length} chunks`);
     }
   });
 
@@ -63,6 +65,14 @@ describe("chunkText source coverage", () => {
     assert.deepEqual(split(body).map((chunk) => chunk.text), [
       body.slice(0, 1200), body.slice(1020, 2220), body.slice(2040)
     ]);
+  });
+
+  it("avoids a one-character walk when overlap exceeds an unbroken window", () => {
+    const body = Array.from({ length: 3600 }, (_, i) => String.fromCharCode(0xE000 + i)).join("");
+    for (const overlap of [1200, 1500]) {
+      const chunks = assertCoverage(body, 1200, overlap);
+      assert.equal(chunks.length, 3);
+    }
   });
 
   it("normalizes line endings and ignores empty bodies", () => {
