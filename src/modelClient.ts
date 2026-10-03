@@ -1,4 +1,5 @@
 import { requestUrl } from "obsidian";
+import { postModelJson, resolveModelAuth, type ModelHttpRequest } from "./modelAuth";
 import { rerankDocument, type RerankOptions } from "./searchPipeline";
 import type { LocalSmartLookupSettings, SearchResult } from "./types";
 
@@ -30,23 +31,42 @@ export function l2Normalize(vector: number[]): number[] | null {
   return vector.map((value) => value * inv);
 }
 
+const obsidianModelRequest: ModelHttpRequest = async (init) => {
+  const response = await requestUrl({
+    url: init.url,
+    method: init.method,
+    contentType: init.contentType,
+    headers: init.headers,
+    body: init.body,
+    throw: false
+  });
+  return { status: response.status, text: response.text };
+};
+
 export class LocalModelClient {
-  constructor(private getSettings: () => LocalSmartLookupSettings) {}
+  constructor(
+    private getSettings: () => LocalSmartLookupSettings,
+    private request: ModelHttpRequest = obsidianModelRequest
+  ) {}
 
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     const settings = this.getSettings();
-    const response = await requestUrl({
+    const auth = resolveModelAuth(settings, "embedding");
+    const json = await postModelJson(this.request, {
       url: joinUrl(settings.embeddingBaseUrl, settings.embeddingPath),
-      method: "POST",
-      contentType: "application/json",
-      body: JSON.stringify({
+      endpoint: "embedding",
+      apiKey: auth.apiKey,
+      headerName: auth.headerName,
+      body: {
         model: settings.embeddingModel,
         input: texts
-      })
-    });
+      }
+    }) as EmbeddingResponse;
 
-    const json = response.json as EmbeddingResponse;
+    if (!json || typeof json !== "object") {
+      throw new Error("Embedding response did not include vectors.");
+    }
     if (Array.isArray(json.data)) {
       return json.data.map((item) => item.embedding);
     }
@@ -65,19 +85,23 @@ export class LocalModelClient {
       return results;
     }
 
-    const response = await requestUrl({
+    const auth = resolveModelAuth(settings, "rerank");
+    const json = await postModelJson(this.request, {
       url: joinUrl(settings.rerankBaseUrl, settings.rerankPath),
-      method: "POST",
-      contentType: "application/json",
-      body: JSON.stringify({
+      endpoint: "rerank",
+      apiKey: auth.apiKey,
+      headerName: auth.headerName,
+      body: {
         model: settings.rerankModel,
         query,
         documents: results.map((result) => rerankDocument(result.text, options.maxChars))
-      })
-    });
+      }
+    }) as { results?: RerankItem[] } | RerankItem[] | null;
 
-    const raw = response.json as { results?: RerankItem[] } | RerankItem[];
-    const items = Array.isArray(raw) ? raw : raw.results;
+    if (!json || typeof json !== "object") {
+      throw new Error("Rerank response did not include results.");
+    }
+    const items = Array.isArray(json) ? json : json.results;
     if (!Array.isArray(items)) throw new Error("Rerank response did not include results.");
 
     const byIndex = new Map<number, number>();

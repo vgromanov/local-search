@@ -6,6 +6,7 @@ import { LocalModelClient } from "./modelClient";
 import { registerRestRoutes } from "./restRoutes";
 import { SearchService } from "./searchService";
 import { ConfirmModal, DEFAULT_SETTINGS, LocalSmartLookupSettingTab } from "./settings";
+import { settingsFromStoredData } from "./storedSettings";
 import type { LocalSmartLookupSettings } from "./types";
 import { LanceVectorStore } from "./vectorStore";
 import { LocalSmartLookupView, VIEW_TYPE_LOCAL_SMART_LOOKUP } from "./view";
@@ -154,7 +155,7 @@ export default class LocalSmartLookupPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings = settingsFromStoredData(DEFAULT_SETTINGS, await this.loadData());
   }
 
   async saveSettings(): Promise<void> {

@@ -7,9 +7,13 @@ export const DEFAULT_SETTINGS: LocalSmartLookupSettings = {
   embeddingBaseUrl: "http://127.0.0.1:11434",
   embeddingModel: "nomic-embed-text",
   embeddingPath: "/v1/embeddings",
+  embeddingApiKey: "",
+  embeddingApiKeyHeader: "",
   rerankBaseUrl: "http://127.0.0.1:11434",
   rerankModel: "",
   rerankPath: "/v1/rerank",
+  rerankApiKey: "",
+  rerankApiKeyHeader: "",
   useRerank: false,
   chunkSize: 1200,
   chunkOverlap: 180,
@@ -30,6 +34,19 @@ export const DEFAULT_SETTINGS: LocalSmartLookupSettings = {
 function numberSetting(value: string, fallback: number, min: number): number {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? Math.max(min, parsed) : fallback;
+}
+
+function addSecretText(
+  setting: Setting,
+  value: string,
+  onChange: (value: string) => Promise<void>
+): void {
+  setting.addText((text) => {
+    text.inputEl.type = "password";
+    text.inputEl.autocomplete = "off";
+    text.inputEl.spellcheck = false;
+    text.setValue(value).onChange(onChange);
+  });
 }
 
 export class ConfirmModal extends Modal {
@@ -72,7 +89,7 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Embedding server")
-      .setDesc("Local oMLX or OpenAI-compatible base URL.")
+      .setDesc("OpenAI-compatible base URL, local or hosted. A hosted URL sends note text off this machine.")
       .addText((text) => text
         .setPlaceholder("http://127.0.0.1:11434")
         .setValue(this.plugin.settings.embeddingBaseUrl)
@@ -101,9 +118,31 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }));
 
+    addSecretText(
+      new Setting(containerEl)
+        .setName("Embedding API key")
+        .setDesc("Leave empty to send no auth header. Stored in this plugin's data.json and omitted from REST responses."),
+      this.plugin.settings.embeddingApiKey,
+      async (value) => {
+        this.plugin.settings.embeddingApiKey = value.trim();
+        await this.plugin.saveSettings();
+      }
+    );
+
     new Setting(containerEl)
-      .setName("Use local reranker")
-      .setDesc("Reranks the vector candidates through a local endpoint after semantic retrieval.")
+      .setName("Embedding API key header")
+      .setDesc("Optional header name. Empty sends Authorization: Bearer. Set x-api-key to send the raw key in that header.")
+      .addText((text) => text
+        .setPlaceholder("Authorization")
+        .setValue(this.plugin.settings.embeddingApiKeyHeader)
+        .onChange(async (value) => {
+          this.plugin.settings.embeddingApiKeyHeader = value.trim();
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Use reranker")
+      .setDesc("Reranks the vector candidates through the rerank server after semantic retrieval.")
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.useRerank)
         .onChange(async (value) => {
@@ -113,6 +152,7 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Rerank server")
+      .setDesc("OpenAI-compatible base URL. It may be a different host than the embedding server.")
       .addText((text) => text
         .setPlaceholder("http://127.0.0.1:11434")
         .setValue(this.plugin.settings.rerankBaseUrl)
@@ -138,6 +178,28 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.rerankModel)
         .onChange(async (value) => {
           this.plugin.settings.rerankModel = value.trim();
+          await this.plugin.saveSettings();
+        }));
+
+    addSecretText(
+      new Setting(containerEl)
+        .setName("Rerank API key")
+        .setDesc("Optional. Leave empty to reuse the embedding API key."),
+      this.plugin.settings.rerankApiKey,
+      async (value) => {
+        this.plugin.settings.rerankApiKey = value.trim();
+        await this.plugin.saveSettings();
+      }
+    );
+
+    new Setting(containerEl)
+      .setName("Rerank API key header")
+      .setDesc("Optional. Leave empty to reuse the embedding API key header.")
+      .addText((text) => text
+        .setPlaceholder("Authorization")
+        .setValue(this.plugin.settings.rerankApiKeyHeader)
+        .onChange(async (value) => {
+          this.plugin.settings.rerankApiKeyHeader = value.trim();
           await this.plugin.saveSettings();
         }));
 

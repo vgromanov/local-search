@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { rejectedApiKeyMessage } from "./modelAuth.ts";
 import {
   applyQueryInstruction,
   collapseByNote,
@@ -179,6 +180,38 @@ describe("runHybridSearch degradation", () => {
     );
     assert.deepEqual(degraded, ["lexical"]);
     assert.equal(results.length, 3);
+  });
+
+  it("keeps lexical results when the embedding server rejects the API key", async () => {
+    const { results, degraded } = await runHybridSearch(
+      request(),
+      { ...SETTINGS, useRerank: false },
+      legs({ embed: async () => { throw new Error(rejectedApiKeyMessage("embedding")); } })
+    );
+    assert.deepEqual(degraded, ["vector"]);
+    assert.deepEqual(paths(results), ["c.md#0", "b.md#0"]);
+  });
+
+  it("keeps retrieval results when the rerank server rejects the API key", async () => {
+    const { results, degraded } = await runHybridSearch(
+      request(),
+      SETTINGS,
+      legs({ rerank: async () => { throw new Error(rejectedApiKeyMessage("rerank")); } })
+    );
+    assert.deepEqual(degraded, ["rerank"]);
+    assert.ok(results.length > 0);
+    assert.ok(results.every((result) => result.rerankScore === undefined));
+  });
+
+  it("surfaces a rejected API key when no retrieval leg is available", async () => {
+    await assert.rejects(
+      runHybridSearch(
+        request(),
+        { ...SETTINGS, useLexical: false },
+        legs({ embed: async () => { throw new Error(rejectedApiKeyMessage("embedding")); } })
+      ),
+      /The embedding server rejected the API key/
+    );
   });
 
   it("throws when no retrieval leg is available", async () => {
