@@ -54,6 +54,30 @@ run) can ratchet server memory up. To bound it, lower `rerankPoolSize`, or set
 reranker. Searches can pass `rerankPoolSize` / `rerankMaxChars` per request,
 but those can only lower the settings, never raise them.
 
+## Using a hosted provider
+
+The embedding and rerank base URLs can point at a hosted API instead of a
+server on this machine. Set an API key for each server in plugin settings.
+The rerank key is optional: when it is empty, rerank requests reuse the
+embedding API key. The same fallback applies to the rerank API key header.
+
+Leave the API key header empty to send `Authorization: Bearer <key>`. Set it
+to a header name such as `x-api-key` to send the raw key in that header
+instead. An empty API key sends no auth header, so a local server that does
+not check keys keeps working. A rejected key (HTTP 401 or 403) is reported as
+"The embedding server rejected the API key" or "The rerank server rejected
+the API key" and that leg is skipped like any other server failure.
+
+The key is saved in the plugin's local `data.json`. Plugin REST routes,
+including `/si/index_info/`, do not return it.
+
+A hosted provider receives the text the plugin embeds and reranks: note
+chunks during indexing, and the query plus candidate chunks during search.
+That text leaves the machine.
+
+Request and response bodies stay the OpenAI-style shapes above. The API key
+only adds a header.
+
 ## Index storage
 
 The local index lives at:

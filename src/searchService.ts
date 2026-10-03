@@ -59,7 +59,10 @@ export class SearchService {
         lexicalSearch: (text, opts) => this.store.searchLexical(text, opts),
         rerank: (text, candidates, rerankOptions) => this.modelClient.rerank(text, candidates, rerankOptions)
       },
-      (leg, error) => console.warn(`Local Smart Lookup: ${leg} leg unavailable, degrading search.`, error)
+      (leg, error) => {
+        const message = error instanceof Error ? error.message : "request failed";
+        console.warn(`Local Smart Lookup: ${leg} leg unavailable, degrading search. ${message}`);
+      }
     );
   }
 

@@ -4,9 +4,17 @@ export interface LocalSmartLookupSettings {
   embeddingBaseUrl: string;
   embeddingModel: string;
   embeddingPath: string;
+  /** Empty sends no auth header. */
+  embeddingApiKey: string;
+  /** Empty means `Authorization: Bearer`. Any other name sends the raw key. */
+  embeddingApiKeyHeader: string;
   rerankBaseUrl: string;
   rerankModel: string;
   rerankPath: string;
+  /** Empty reuses `embeddingApiKey`. */
+  rerankApiKey: string;
+  /** Empty reuses `embeddingApiKeyHeader`. */
+  rerankApiKeyHeader: string;
   useRerank: boolean;
   chunkSize: number;
   chunkOverlap: number;
