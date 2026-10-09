@@ -224,6 +224,36 @@ describe("serializeValue DataArray and pages", () => {
     assert.deepEqual(warningCodes(result), ["dropped-duplicate-key"]);
   });
 
+  it("collapses page keys when the canonical form keeps emoji", () => {
+    const same = serializeValue({
+      file: { path: "a.md", frontmatter: { "Due 📅": "tomorrow" } },
+      "due-📅": "tomorrow"
+    });
+    assert.deepEqual(same.value, {
+      file: { path: "a.md", frontmatter: { "Due 📅": "tomorrow" } },
+      "Due 📅": "tomorrow"
+    });
+    assert.deepEqual(same.warnings, []);
+    assert.equal("due-📅" in (same.value as object), false);
+
+    const different = serializeValue({
+      file: { path: "a.md", frontmatter: { "Due 📅": "original" } },
+      "Due 📅": "original",
+      "due-📅": "canonical"
+    });
+    assert.equal((different.value as { "Due 📅": string })["Due 📅"], "original");
+    assert.equal("due-📅" in (different.value as object), false);
+    assert.deepEqual(warningCodes(different), ["dropped-duplicate-key"]);
+
+    const heart = serializeValue({
+      file: { path: "a.md", frontmatter: { "Status ❤️": "ok" } },
+      "status-❤️": "ok"
+    });
+    assert.equal((heart.value as { "Status ❤️": string })["Status ❤️"], "ok");
+    assert.equal("status-❤️" in (heart.value as object), false);
+    assert.deepEqual(heart.warnings, []);
+  });
+
   it("drops a canonical duplicate even when frontmatter does not list the field", () => {
     const shared = "ready";
     const same = serializeValue({

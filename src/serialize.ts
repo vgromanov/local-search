@@ -1,3 +1,4 @@
+import emojiRegex from "emoji-regex";
 import { extractPath } from "./dataview.ts";
 
 /**
@@ -360,15 +361,38 @@ function readFileFrontmatter(value: object): Record<string, unknown> | null {
 }
 
 /**
- * Dataview `canonicalizeVarName`: lowercase letters, numbers, `_`, and `-`;
- * whitespace becomes `-`; every other character is dropped. Emoji is not
- * preserved.
+ * Dataview `canonicalizeVarName`: an emoji sequence stays as-is (same
+ * `emoji-regex` major version Dataview uses), a run of letters, numbers, `_`,
+ * or `-` is lowercased, each whitespace character becomes `-`, and every
+ * other character is dropped.
  */
+const dataviewEmoji = emojiRegex();
+
 function canonicalizeDataviewKey(name: string): string {
   let out = "";
-  for (const ch of name) {
-    if (/[\p{Letter}\p{Number}_-]/u.test(ch)) out += ch.toLocaleLowerCase();
-    else if (/\s/u.test(ch)) out += "-";
+  let index = 0;
+  while (index < name.length) {
+    const rest = name.slice(index);
+    dataviewEmoji.lastIndex = 0;
+    const emoji = dataviewEmoji.exec(rest);
+    if (emoji && emoji.index === 0) {
+      out += emoji[0];
+      index += emoji[0].length;
+      continue;
+    }
+    const word = /^[0-9\p{Letter}_-]+/u.exec(rest);
+    if (word) {
+      out += word[0].toLocaleLowerCase();
+      index += word[0].length;
+      continue;
+    }
+    const whitespace = /^\s/u.exec(rest);
+    if (whitespace) {
+      out += "-";
+      index += whitespace[0].length;
+      continue;
+    }
+    index += rest.codePointAt(0)! > 0xffff ? 2 : 1;
   }
   return out;
 }

@@ -26,6 +26,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
-    "@lancedb/lancedb": "^0.30.0"
+    "@lancedb/lancedb": "^0.30.0",
+    "emoji-regex": "10.4.0"
   }
 }
