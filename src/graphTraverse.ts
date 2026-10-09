@@ -193,12 +193,15 @@ export async function executeGraphTraverse(
 
   if (!graph.nodes.some((node) => node.inScope)) return fail(400, "scope has no notes");
 
-  const byId = new Map<string, GraphNode>();
+  const byId = new Map<string, GraphNode[]>();
   const byPath = new Map<string, GraphNode>();
   for (const node of graph.nodes) {
-    byId.set(node.id, node);
+    const listed = byId.get(node.id);
+    if (listed) listed.push(node);
+    else byId.set(node.id, [node]);
     byPath.set(node.path, node);
   }
+  for (const listed of byId.values()) listed.sort((a, b) => compareText(a.path, b.path));
 
   const clock = deps.now ?? Date.now;
   const deadline = clock() + query.timeoutMs;
@@ -218,9 +221,8 @@ export async function executeGraphTraverse(
     for (const [id, nodeDepth] of walked.depth) depth.set(id, nodeDepth);
   }
 
-  const selectedNodes = [...depth.keys()]
-    .map((id) => byId.get(id))
-    .filter((node): node is GraphNode => node !== undefined);
+  const selectedNodes = nodesForIds(depth.keys(), byId);
+  if (selectedNodes.length > query.limitNodes) truncated = true;
 
   let edges = graph.edges
     .filter((edge) => depth.has(edge.from) && depth.has(edge.to))
@@ -274,9 +276,22 @@ function selectWholeScope(graph: LinkGraph, limitNodes: number): { ids: string[]
   return { ids: ordered.slice(0, limitNodes), truncated: true };
 }
 
+function nodesForIds(ids: Iterable<string>, byId: Map<string, GraphNode[]>): GraphNode[] {
+  const seen = new Set<string>();
+  const nodes: GraphNode[] = [];
+  for (const id of ids) {
+    for (const node of byId.get(id) ?? []) {
+      if (seen.has(node.path)) continue;
+      seen.add(node.path);
+      nodes.push(node);
+    }
+  }
+  return nodes;
+}
+
 function resolveStart(
   tokens: readonly string[],
-  byId: Map<string, GraphNode>,
+  byId: Map<string, GraphNode[]>,
   byPath: Map<string, GraphNode>
 ): { ok: true; ids: string[] } | { ok: false; missing: string[] } {
   const ids: string[] = [];
@@ -284,7 +299,8 @@ function resolveStart(
   const missing: string[] = [];
   const reported = new Set<string>();
   for (const token of tokens) {
-    const node = byId.get(token) ?? byPath.get(token);
+    const listed = byId.get(token);
+    const node = listed && listed.length > 0 ? listed[0] : byPath.get(token);
     if (!node) {
       if (!reported.has(token)) {
         reported.add(token);
@@ -303,7 +319,7 @@ function resolveStart(
 function adjacency(
   edges: readonly GraphEdge[],
   direction: Direction,
-  byId: Map<string, GraphNode>
+  byId: Map<string, GraphNode[]>
 ): Map<string, string[]> {
   const sets = new Map<string, Set<string>>();
   const add = (from: string, to: string): void => {
@@ -695,7 +711,7 @@ function sendFailure(
 }
 
 function compareTraverseNode(a: TraverseNode, b: TraverseNode): number {
-  return a.depth - b.depth || compareText(a.id, b.id);
+  return a.depth - b.depth || compareText(a.id, b.id) || compareText(a.path, b.path);
 }
 
 function compareEdge(a: TraverseEdge, b: TraverseEdge): number {

@@ -294,6 +294,36 @@ describe("graph traverse export, cycles, and filters", () => {
     assert.deepEqual(other.conflicts, []);
   });
 
+  it("keeps every note when an id field collides with another note's path", async () => {
+    const files: FakeFile[] = [
+      { path: "a.md", cache: fm({ id: "b.md", depends_on: "c", status: "from-a" }) },
+      { path: "b.md", cache: fm({ status: "from-b" }) },
+      { path: "c.md", cache: fm({ id: "c" }) }
+    ];
+    const notes: Record<string, NoteView> = {
+      "a.md": { frontmatter: { status: "from-a" } },
+      "b.md": { frontmatter: { status: "from-b" } },
+      "c.md": { frontmatter: { id: "c" } }
+    };
+    const exported = await ok(files, request({ include: ["status", "$path"] }), notes);
+    assert.deepEqual(exported.conflicts, []);
+    assert.deepEqual(exported.nodes.map((node) => [node.id, node.path, node.depth, node.fields.status]), [
+      ["b.md", "a.md", 0, "from-a"],
+      ["b.md", "b.md", 0, "from-b"],
+      ["c", "c.md", 0, null]
+    ]);
+    assert.deepEqual(exported.edges, [{ from: "b.md", to: "c", source: "depends_on" }]);
+
+    const started = await ok(files, request({ start: ["b.md"], include: ["$path"] }), notes);
+    assert.deepEqual(started.nodes.map((node) => [node.id, node.path, node.depth]), [
+      ["b.md", "a.md", 0],
+      ["b.md", "b.md", 0],
+      ["c", "c.md", 1]
+    ]);
+    assert.deepEqual(started.nodes.map((node) => node.fields.$path), ["a.md", "b.md", "c.md"]);
+    assert.deepEqual(started.edges, [{ from: "b.md", to: "c", source: "depends_on" }]);
+  });
+
   it("does not mutate the cached index", async () => {
     const index = createIndex([
       { path: "a.md", cache: fm({ id: "a", depends_on: "b" }) },
