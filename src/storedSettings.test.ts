@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import {
+  DEFAULT_DATAVIEW_QUERY_MAX_ROWS,
+  DEFAULT_DATAVIEW_QUERY_MAX_TIMEOUT_MS
+} from "./dataviewQuery.ts";
 import { settingsFromStoredData } from "./storedSettings.ts";
 import type { LocalSmartLookupSettings } from "./types.ts";
 
@@ -20,6 +24,8 @@ const defaults = {
   chunkOverlap: 180,
   defaultLimit: 10,
   defaultDataviewSource: "",
+  dataviewQueryMaxRows: DEFAULT_DATAVIEW_QUERY_MAX_ROWS,
+  dataviewQueryMaxTimeoutMs: DEFAULT_DATAVIEW_QUERY_MAX_TIMEOUT_MS,
   useLexical: true,
   candidateMultiplier: 4,
   rerankPoolSize: 50,
@@ -58,5 +64,7 @@ describe("settingsFromStoredData", () => {
     assert.equal(settings.embeddingApiKey, "");
     assert.equal(settings.rerankApiKey, "");
     assert.equal(settings.embeddingApiKeyHeader, "");
+    assert.equal(settings.dataviewQueryMaxRows, DEFAULT_DATAVIEW_QUERY_MAX_ROWS);
+    assert.equal(settings.dataviewQueryMaxTimeoutMs, DEFAULT_DATAVIEW_QUERY_MAX_TIMEOUT_MS);
   });
 });
