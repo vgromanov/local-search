@@ -20,6 +20,10 @@ export interface LocalSmartLookupSettings {
   chunkOverlap: number;
   defaultLimit: number;
   defaultDataviewSource: string;
+  /** Hard maximum rows for `POST /dataview/query/`. Requests are clamped to this. */
+  dataviewQueryMaxRows: number;
+  /** Hard maximum `timeout_ms` for `POST /dataview/query/`. Requests are clamped to this. */
+  dataviewQueryMaxTimeoutMs: number;
   useLexical: boolean;
   candidateMultiplier: number;
   rerankPoolSize: number;
@@ -129,6 +133,7 @@ export interface SearchResult extends VaultChunk {
 export interface DataviewApi {
   pages?: (source?: string) => unknown;
   query?: (query: string, file?: string) => Promise<unknown>;
+  index?: { initialized?: boolean } | null;
 }
 
 export interface ObsidianRestPublicApi {

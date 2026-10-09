@@ -1,4 +1,8 @@
 import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
+import {
+  DEFAULT_DATAVIEW_QUERY_MAX_ROWS,
+  DEFAULT_DATAVIEW_QUERY_MAX_TIMEOUT_MS
+} from "./dataviewQuery";
 import type LocalSmartLookupPlugin from "./main";
 import type { LocalSmartLookupSettings } from "./types";
 import { formatBytes } from "./vectorStore";
@@ -19,6 +23,8 @@ export const DEFAULT_SETTINGS: LocalSmartLookupSettings = {
   chunkOverlap: 180,
   defaultLimit: 10,
   defaultDataviewSource: "",
+  dataviewQueryMaxRows: DEFAULT_DATAVIEW_QUERY_MAX_ROWS,
+  dataviewQueryMaxTimeoutMs: DEFAULT_DATAVIEW_QUERY_MAX_TIMEOUT_MS,
   useLexical: true,
   candidateMultiplier: 4,
   rerankPoolSize: 50,
@@ -300,6 +306,32 @@ export class LocalSmartLookupSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.collapseByNote)
         .onChange(async (value) => {
           this.plugin.settings.collapseByNote = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Dataview query row cap")
+      .setDesc("Hard maximum rows for the Dataview query route. Larger requests are clamped to this value.")
+      .addText((text) => text
+        .setPlaceholder(String(DEFAULT_DATAVIEW_QUERY_MAX_ROWS))
+        .setValue(String(this.plugin.settings.dataviewQueryMaxRows))
+        .onChange(async (value) => {
+          this.plugin.settings.dataviewQueryMaxRows = Math.round(
+            numberSetting(value, DEFAULT_DATAVIEW_QUERY_MAX_ROWS, 1)
+          );
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Dataview query timeout cap")
+      .setDesc("Hard maximum timeout in milliseconds for the Dataview query route.")
+      .addText((text) => text
+        .setPlaceholder(String(DEFAULT_DATAVIEW_QUERY_MAX_TIMEOUT_MS))
+        .setValue(String(this.plugin.settings.dataviewQueryMaxTimeoutMs))
+        .onChange(async (value) => {
+          this.plugin.settings.dataviewQueryMaxTimeoutMs = Math.round(
+            numberSetting(value, DEFAULT_DATAVIEW_QUERY_MAX_TIMEOUT_MS, 1)
+          );
           await this.plugin.saveSettings();
         }));
 
