@@ -283,6 +283,26 @@ describe("POST /dataview/query/", () => {
     }
   });
 
+  it("accepts tags, paths, and fields that contain function", async () => {
+    const queries = [
+      "LIST FROM #function",
+      "LIST FROM my-function",
+      "TABLE file.function FROM \"Notes/my-function\""
+    ];
+    for (const query of queries) {
+      let seen = "";
+      const outcome = await run(async (source) => {
+        seen = source;
+        return {
+          successful: true,
+          value: { type: "list", values: ["a.md"], primaryMeaning: { type: "path" } }
+        };
+      }, { query });
+      assert.equal(seen, query);
+      assert.equal(outcome.ok, true);
+    }
+  });
+
   it("keeps Dataview order when the query has SORT", async () => {
     const outcome = await run(async () => ({
       successful: true,

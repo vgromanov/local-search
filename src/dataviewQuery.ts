@@ -190,7 +190,12 @@ export function rejectQuery(source: string): string | null {
   const bare = stripQuoted(source);
   if (/\bdataviewjs\b/i.test(bare)) return DATAVIEWJS_REJECTED;
   if (/\$\s*=/.test(bare)) return INLINE_JS_REJECTED;
-  if (/\bfunction\b/.test(bare) || /=>/.test(bare)) return JS_EXPR_REJECTED;
+  // `function` as a keyword (`function name(`), not a tag, path, or field
+  // such as `#function` or `my-function`. Those contain the same letters
+  // after a non-word character, which a bare word-boundary check rejects.
+  if (/\bfunction\s*\*?\s*(?:[A-Za-z_$][\w$]*\s*)?\(/.test(bare) || /=>/.test(bare)) {
+    return JS_EXPR_REJECTED;
+  }
   const keyword = /^(TABLE|LIST|TASK|CALENDAR)\b/i.exec(source);
   if (!keyword) return QUERY_TYPE_REJECTED;
   if (keyword[1].toUpperCase() === "CALENDAR") return CALENDAR_REJECTED;
