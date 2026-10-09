@@ -283,6 +283,44 @@ describe("POST /dataview/query/", () => {
     }
   });
 
+  it("ignores // comments and keeps // inside quotes", async () => {
+    const commented = [
+      "LIST FROM #tag // dataviewjs $= => function evil()",
+      "// dataviewjs\nLIST FROM #tag",
+      "LIST // SORT file.name DESC"
+    ];
+    for (const query of commented) {
+      let seen = "";
+      const outcome = await run(async (source) => {
+        seen = source;
+        return {
+          successful: true,
+          value: {
+            type: "list",
+            values: ["z.md", "a.md"],
+            primaryMeaning: { type: "path" }
+          }
+        };
+      }, { query });
+      assert.equal(seen, query);
+      assert.equal(outcome.ok, true, query);
+      if (!outcome.ok) return;
+      assert.deepEqual(outcome.body.items, ["a.md", "z.md"]);
+    }
+
+    const sorted = await run(async () => ({
+      successful: true,
+      value: {
+        type: "list",
+        values: ["z.md", "a.md"],
+        primaryMeaning: { type: "path" }
+      }
+    }), { query: "LIST WHERE name = \"http://example.com\" SORT file.name DESC" });
+    assert.equal(sorted.ok, true);
+    if (!sorted.ok) return;
+    assert.deepEqual(sorted.body.items, ["z.md", "a.md"]);
+  });
+
   it("accepts tags, paths, and fields that contain function", async () => {
     const queries = [
       "LIST FROM #function",

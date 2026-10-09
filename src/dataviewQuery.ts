@@ -162,32 +162,42 @@ function positiveInt(value: unknown): number | null {
   return Math.floor(value);
 }
 
-/** Quoted strings are removed so a literal `$=` or `SORT` is not treated as syntax. */
-export function stripQuoted(source: string): string {
+/**
+ * Remove double-quoted strings and `//` line comments so syntax checks do not
+ * see literals or comments. `//` inside a quoted string is not a comment.
+ * The query sent to Dataview is unchanged.
+ */
+function stripSyntaxNoise(source: string): string {
   let out = "";
   for (let index = 0; index < source.length; index++) {
     const char = source[index];
-    if (char !== "\"") {
-      out += char;
+    if (char === "\"") {
+      out += "\"\"";
+      index++;
+      while (index < source.length) {
+        if (source[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        if (source[index] === "\"") break;
+        index++;
+      }
       continue;
     }
-    out += "\"\"";
-    index++;
-    while (index < source.length) {
-      if (source[index] === "\\") {
-        index += 2;
-        continue;
-      }
-      if (source[index] === "\"") break;
-      index++;
+    if (char === "/" && source[index + 1] === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n") index++;
+      if (source[index] === "\n") out += "\n";
+      continue;
     }
+    out += char;
   }
   return out;
 }
 
 export function rejectQuery(source: string): string | null {
   if (!source) return "`query` must be a string";
-  const bare = stripQuoted(source);
+  const bare = stripSyntaxNoise(source).trim();
   if (/\bdataviewjs\b/i.test(bare)) return DATAVIEWJS_REJECTED;
   if (/\$\s*=/.test(bare)) return INLINE_JS_REJECTED;
   // `function` as a keyword (`function name(`), not a tag, path, or field
@@ -196,14 +206,14 @@ export function rejectQuery(source: string): string | null {
   if (/\bfunction\s*\*?\s*(?:[A-Za-z_$][\w$]*\s*)?\(/.test(bare) || /=>/.test(bare)) {
     return JS_EXPR_REJECTED;
   }
-  const keyword = /^(TABLE|LIST|TASK|CALENDAR)\b/i.exec(source);
+  const keyword = /^(TABLE|LIST|TASK|CALENDAR)\b/i.exec(bare);
   if (!keyword) return QUERY_TYPE_REJECTED;
   if (keyword[1].toUpperCase() === "CALENDAR") return CALENDAR_REJECTED;
   return null;
 }
 
 function hasSort(source: string): boolean {
-  return /\bSORT\b/i.test(stripQuoted(source));
+  return /\bSORT\b/i.test(stripSyntaxNoise(source));
 }
 
 function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
