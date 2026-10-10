@@ -1,3 +1,4 @@
+import { dataviewIndexReady, executeDataviewQuery } from "./dataviewQuery";
 import type LocalSmartLookupPlugin from "./main";
 import {
   FilterCompileError,
@@ -584,6 +585,33 @@ function readRouteParam(req: unknown, name: string): string {
   return "";
 }
 
+function registerDataviewQueryRoute(plugin: LocalSmartLookupPlugin, api: RestApi): void {
+  // Local REST API authenticates this route before the handler runs.
+  api.addRoute("/dataview/query/")
+    .post?.(async (req, res) => {
+      try {
+        const dataview = plugin.dataviewFilter.api;
+        const runQuery = dataview?.query;
+        const outcome = await executeDataviewQuery(
+          {
+            query: runQuery ? (source) => runQuery.call(dataview, source) : null,
+            indexReady: dataviewIndexReady(plugin.app, dataview),
+            maxRows: plugin.settings.dataviewQueryMaxRows,
+            maxTimeoutMs: plugin.settings.dataviewQueryMaxTimeoutMs
+          },
+          readJsonBody(req)
+        );
+        if (outcome.ok) {
+          sendJson(api, res, outcome.body);
+          return;
+        }
+        sendError(api, res, outcome.status, outcome.message);
+      } catch (error) {
+        sendError(api, res, 500, error);
+      }
+    });
+}
+
 function registerFrontmatterKeyRoutes(plugin: LocalSmartLookupPlugin, api: RestApi): void {
   // Properties hygiene (vault metadata UX) — not under /si/* (SI = LanceDB mining).
   api.addRoute("/frontmatter_keys/")
@@ -677,6 +705,7 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void)
   registerGraphTraverseRoute(api, graphTraverse.deps);
 
   registerFrontmatterKeyRoutes(plugin, api);
+  registerDataviewQueryRoute(plugin, api);
   registerSiRoutes(plugin, api);
 
   return () => {
