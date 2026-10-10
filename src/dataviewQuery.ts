@@ -204,12 +204,11 @@ export function rejectQuery(source: string): string | null {
   // such as `#function` or `my-function`. Those contain the same letters
   // after a non-word character, which a bare word-boundary check rejects.
   // DQL lambdas `(x) => expr` are evaluated by Dataview, so `=>` is not a
-  // JavaScript marker. `dv.` and `this.app` are the DataviewJS API. A `dv.`
-  // after `/` is a path segment, not that API.
+  // JavaScript marker. `this.app` is a field on the current page. `dv.pages`
+  // is the DataviewJS API only when `dv` is its own identifier. A hyphen or
+  // slash before `dv` (`my-dv.pages`, `folder/dv.pages`) is a path or tag.
   if (/\bfunction\s*\*?\s*(?:[A-Za-z_$][\w$]*\s*)?\(/.test(bare)) return JS_EXPR_REJECTED;
-  if (/(?<![\w/])dv\s*\.\s*[A-Za-z_$]/.test(bare) || /(?<![\w/])this\s*\.\s*app\b/.test(bare)) {
-    return JS_EXPR_REJECTED;
-  }
+  if (/(?<![\w/-])dv\s*\.\s*[A-Za-z_$]/.test(bare)) return JS_EXPR_REJECTED;
   const keyword = /^(TABLE|LIST|TASK|CALENDAR)\b/i.exec(bare);
   if (!keyword) return QUERY_TYPE_REJECTED;
   if (keyword[1].toUpperCase() === "CALENDAR") return CALENDAR_REJECTED;

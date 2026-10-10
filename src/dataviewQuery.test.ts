@@ -297,11 +297,34 @@ describe("POST /dataview/query/", () => {
     }
   });
 
+  it("accepts this.app as a field and a path containing -dv.", async () => {
+    const queries = [
+      "TABLE this.app",
+      "TABLE file.name WHERE this.app = \"ready\"",
+      "LIST FROM my-dv.pages",
+      "LIST FROM folder/dv.pages"
+    ];
+    for (const query of queries) {
+      let seen = "";
+      const outcome = await run(async (source) => {
+        seen = source;
+        return {
+          successful: true,
+          value: { type: "list", values: ["a.md"], primaryMeaning: { type: "path" } }
+        };
+      }, { query });
+      assert.equal(seen, query);
+      assert.equal(outcome.ok, true, query);
+      if (!outcome.ok) return;
+      assert.deepEqual(outcome.body.items, ["a.md"]);
+    }
+  });
+
   it("rejects $= dv.pages() and dataviewjs before execution", async () => {
     const cases: Array<[string, string]> = [
       ["$= dv.pages()", "Inline JavaScript ($=) is not supported"],
       ["dataviewjs", "dataviewjs is not supported"],
-      ["TABLE file.name WHERE this.app.vault.getFiles()", "JavaScript expressions are not supported"]
+      ["dv.pages(\"#tag\").map(p => p.file.path)", "JavaScript expressions are not supported"]
     ];
     for (const [query, message] of cases) {
       let called = false;
