@@ -32,10 +32,10 @@ Recursion lives here. Neither JsonLogic nor DQL can walk a link closure.
 | Field | Default | Rule |
 |-------|---------|------|
 | `scope` | `""` (whole vault) | String. A trailing slash matches descendants only. `Notes` also matches `Notes/a.md`. Trimmed before the index lookup |
-| `id_field` | — | Required non-empty string. `400` `` `id_field` must be a non-empty string `` |
+| `id_field` | path | Optional. A non-empty string names the frontmatter field used as the node id. Omit or `null` and each node id is its vault path; edge values then resolve by link resolution and exact path only. A blank string is `400` `` `id_field` must be a non-empty string `` |
 | `edges` | — | Required non-empty list. See below |
 | `start` | omit | Ids or paths. Omit or `null` to export the scope. `[]` is `400` |
-| `direction` | — | Required. `out`, `in`, or `both`. Anything else, including omission, is `400` `direction must be one of: out, in, both` |
+| `direction` | `out` | `out`, `in`, or `both`. Omit or `null` means `out`. Anything else is `400` `direction must be one of: out, in, both` |
 | `max_depth` | `null` | Non-negative integer, or `null` / omit for no depth cap. `0` is the start nodes only |
 | `include` | `[]` | Field names to project. Duplicates are ignored. Empty strings are `400` |
 | `limit_nodes` | `2000` | Positive integer, clamped to **10000** |
@@ -46,8 +46,8 @@ A non-object body is `400` `Request body must be a JSON object`.
 A cap that is missing, `null` is the default. A cap that is not a positive
 integer is `400` `` `<field>` must be a positive integer ``.
 
-`direction` has no HTTP default. Callers that want outgoing edges must send
-`"out"`.
+A body with only `scope` and `edges` is valid. Omit `id_field` for path
+identity and omit `direction` for `out`.
 
 ### `edges[]`
 
@@ -62,7 +62,9 @@ recorded `section` is the nearest preceding heading, or `null` when the link
 sits above the first heading.
 
 Frontmatter edge values may be a scalar or a list of bare ids, wikilinks, or
-paths. Resolution tries the `id_field` index, then link resolution.
+paths. When `id_field` is set, resolution tries that id index, then link
+resolution, then an exact vault path (a missing `.md` suffix is tried too).
+When `id_field` is omitted, the id index is not used.
 
 ### Reserved names
 
@@ -109,7 +111,7 @@ in scope. Prefer `status` and `$path` unless the body is required.
 
 | Field | Meaning |
 |-------|---------|
-| `nodes` | One object per selected note. `id` is the `id_field` scalar when that note owns it, otherwise the vault path. `depth` is `0` for start nodes and for every node in a start-less export |
+| `nodes` | One object per selected note. `id` is the `id_field` scalar when that field is set and the note owns it, otherwise the vault path. When `id_field` is omitted, `id` is the vault path. `depth` is `0` for start nodes and for every node in a start-less export |
 | `edges` | Stored edges whose endpoints are both selected. `$body` edges include `section` (`string` or `null`). Frontmatter edges omit `section` |
 | `unresolved` | Edge values that did not resolve, limited to selected sources. `$body` entries include `section` |
 | `conflicts` | Ids claimed by more than one note, when one of those notes is selected. `paths` is sorted. The lexicographically first path owns the id; the others use their path as `id` |

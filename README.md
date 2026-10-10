@@ -214,9 +214,11 @@ Full request, error, cap, and `index_ready` rules: [docs/dql-api.md](docs/dql-ap
 
 Read-only bounded walk over the in-memory link graph. `POST /graph/traverse/`
 uses the same Local REST bearer token. `edges[].source` is a frontmatter field
-or `$body` (wikilinks in the note body). `direction` is required: `out`, `in`,
-or `both`. Omit `start` to export every note in `scope` plus the edges among
-them. Full schemas, caps, and reserved `$body` / `$path` / `$mtime` names:
+or `$body` (wikilinks in the note body). `id_field` and `direction` are
+optional: omit `id_field` to key nodes by vault path, and omit `direction`
+for `out` (`in` and `both` are the other directions). Omit `start` to export
+every note in `scope` plus the edges among them. Full schemas, caps, and
+reserved `$body` / `$path` / `$mtime` names:
 [docs/graph-api.md](docs/graph-api.md).
 
 ```json
