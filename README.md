@@ -136,6 +136,7 @@ When a REST API plugin with extension support is enabled, routes are registered 
 - `GET /local-smart-lookup/status/`
 - `GET /frontmatter_keys/`
 - `GET /frontmatter_keys/:name/`
+- `POST /dataview/query/`
 - `POST /graph/traverse/`
 - `GET /si/health/`
 - `GET /si/index_info/`
@@ -179,12 +180,44 @@ Smoke (requires Local REST + `OBSIDIAN_API_KEY`):
 ./scripts/smoke_frontmatter_keys.sh
 ```
 
+### Dataview DQL
+
+Read-only Dataview `TABLE` / `LIST` / `TASK` results. `POST /dataview/query/`
+uses the same Local REST bearer token. `CALENDAR`, DataviewJS, and inline
+JavaScript are rejected. This is a result table, not the path filter on
+`POST /local-smart-lookup/search/`.
+
+```json
+{
+  "query": "TABLE status, owner FROM \"Projects\" WHERE status = \"active\"",
+  "limit": 500
+}
+```
+
+```json
+{
+  "type": "table",
+  "headers": ["File", "status", "owner"],
+  "rows": [{ "file": "Projects/example.md", "status": "active", "owner": "owner" }],
+  "truncated": false,
+  "index_ready": true
+}
+```
+
+Full request, error, cap, and `index_ready` rules: [docs/dql-api.md](docs/dql-api.md).
+
+```bash
+./scripts/smoke_dql.sh
+```
+
 ### Graph traverse
 
 Read-only bounded walk over the in-memory link graph. `POST /graph/traverse/`
 uses the same Local REST bearer token. `edges[].source` is a frontmatter field
-or `$body` (wikilinks in the note body). `direction` is `out`, `in`, or `both`.
-Omit `start` to export every note in `scope` plus the edges among them.
+or `$body` (wikilinks in the note body). `direction` is required: `out`, `in`,
+or `both`. Omit `start` to export every note in `scope` plus the edges among
+them. Full schemas, caps, and reserved `$body` / `$path` / `$mtime` names:
+[docs/graph-api.md](docs/graph-api.md).
 
 ```json
 {
@@ -213,9 +246,13 @@ Omit `start` to export every note in `scope` plus the edges among them.
 
 Nodes are ordered by depth, then id. Edges are ordered by from, to, then source.
 `$body` edges also include `section`. `cycles` lists strongly connected components
-of more than one node. A node cap, edge cap, or time cap sets `truncated` to true.
-Unknown `direction`, empty `edges`, unknown `start` values, or a `scope` with no
-notes returns 400.
+of more than one node. A node cap, edge cap, or deadline sets `truncated` and
+still returns 200. Unknown `direction`, empty `edges`, unknown `start` values,
+or a `scope` with no notes returns 400.
+
+```bash
+./scripts/smoke_graph.sh
+```
 
 Semantic Index (`/si/*`) routes use trailing slashes and the Local REST bearer token.
 They are **read-only**, **never rerank**, and use cosine **distance** thresholds
