@@ -252,6 +252,68 @@ describe("POST /dataview/query/", () => {
     }
   });
 
+  it("accepts DQL lambdas in all(map), filter, and sort", async () => {
+    const queries = [
+      "TABLE owner WHERE status = \"ready\" AND all(map(default(depends_on, list()), (d) => link(d).status = \"done\"))",
+      "LIST WHERE filter(file.tasks, (t) => !t.completed)",
+      "TABLE file.name WHERE length(sort(file.tags, (a) => a)) >= 0",
+      "TABLE this.file.name WHERE all(map(items, (d) => d.text = \"a => b\"))",
+      "LIST FROM folder/dv.pages WHERE this.file.name"
+    ];
+    for (const query of queries) {
+      let seen = "";
+      const outcome = await run(async (source) => {
+        seen = source;
+        return {
+          successful: true,
+          value: { type: "list", values: ["a.md"], primaryMeaning: { type: "path" } }
+        };
+      }, { query });
+      assert.equal(seen, query);
+      assert.equal(outcome.ok, true, query);
+      if (!outcome.ok) return;
+      assert.deepEqual(outcome.body.items, ["a.md"]);
+    }
+  });
+
+  it("accepts an arrow inside a string literal", async () => {
+    const queries = [
+      "TABLE file.name WHERE contains(text, \"a => b\")",
+      "LIST WHERE name = \"(d) => link(d).status\""
+    ];
+    for (const query of queries) {
+      let seen = "";
+      const outcome = await run(async (source) => {
+        seen = source;
+        return {
+          successful: true,
+          value: { type: "list", values: ["a.md"], primaryMeaning: { type: "path" } }
+        };
+      }, { query });
+      assert.equal(seen, query);
+      assert.equal(outcome.ok, true, query);
+      if (!outcome.ok) return;
+      assert.deepEqual(outcome.body.items, ["a.md"]);
+    }
+  });
+
+  it("rejects $= dv.pages() and dataviewjs before execution", async () => {
+    const cases: Array<[string, string]> = [
+      ["$= dv.pages()", "Inline JavaScript ($=) is not supported"],
+      ["dataviewjs", "dataviewjs is not supported"],
+      ["TABLE file.name WHERE this.app.vault.getFiles()", "JavaScript expressions are not supported"]
+    ];
+    for (const [query, message] of cases) {
+      let called = false;
+      const outcome = await run(async () => {
+        called = true;
+        return { successful: true, value: { type: "list", values: [] } };
+      }, { query });
+      assert.equal(called, false, query);
+      assert.deepEqual(outcome, { ok: false, status: 400, message });
+    }
+  });
+
   it("does not treat quoted syntax as JavaScript or as SORT", async () => {
     const queries = [
       "TABLE file.name WHERE contains(file.name, \"$=\")",
