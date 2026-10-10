@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import {
+  BODY_SOURCE,
   createLinkGraphIndexFromApp,
   type GraphEdge,
   type GraphEdgeSource,
@@ -54,12 +55,18 @@ export interface TraverseEdge {
   section?: string | null;
 }
 
+export interface TraverseCycle {
+  ids: string[];
+  /** Edge sources this component was computed over, in request order. */
+  sources: string[];
+}
+
 export interface GraphTraverseResponse {
   nodes: TraverseNode[];
   edges: TraverseEdge[];
   unresolved: GraphUnresolved[];
   conflicts: GraphIdConflict[];
-  cycles: string[][];
+  cycles: TraverseCycle[];
   truncated: boolean;
   index_ready: boolean;
 }
@@ -74,6 +81,7 @@ interface ParsedQuery {
   scope: string;
   idField: string;
   edges: GraphEdgeSource[];
+  cycleSources: string[];
   direction: Direction;
   maxDepth: number | null;
   include: string[];
@@ -228,7 +236,11 @@ export async function executeGraphTraverse(
     .filter((edge) => depth.has(edge.from) && depth.has(edge.to))
     .map(copyEdge)
     .sort(compareEdge);
-  const cycles = stronglyConnected(selectedNodes.map((node) => node.id), edges);
+  const cycleSources = new Set(query.cycleSources);
+  const cycles = stronglyConnected(
+    selectedNodes.map((node) => node.id),
+    edges.filter((edge) => cycleSources.has(edge.source))
+  ).map((ids): TraverseCycle => ({ ids, sources: [...query.cycleSources] }));
   if (edges.length > query.limitEdges) {
     edges = edges.slice(0, query.limitEdges);
     truncated = true;
@@ -540,6 +552,8 @@ function parseRequest(body: unknown): { ok: true; value: ParsedQuery } | { ok: f
 
   const edges = parseEdges(record.edges);
   if (!edges.ok) return edges;
+  const cycleSources = parseCycleSources(record.cycle_sources, edges.value);
+  if (!cycleSources.ok) return cycleSources;
   const direction = parseDirection(record.direction);
   if (!direction.ok) return direction;
   const maxDepth = parseMaxDepth(record.max_depth);
@@ -561,6 +575,7 @@ function parseRequest(body: unknown): { ok: true; value: ParsedQuery } | { ok: f
       scope: typeof record.scope === "string" ? record.scope : "",
       idField: idField.value,
       edges: edges.value,
+      cycleSources: cycleSources.value,
       direction: direction.value,
       maxDepth: maxDepth.value,
       include: include.value,
@@ -570,6 +585,40 @@ function parseRequest(body: unknown): { ok: true; value: ParsedQuery } | { ok: f
       start: start.value
     }
   };
+}
+
+function defaultCycleSources(edges: readonly GraphEdgeSource[]): string[] {
+  const sources: string[] = [];
+  const seen = new Set<string>();
+  for (const edge of edges) {
+    if (edge.source === BODY_SOURCE) continue;
+    if (seen.has(edge.source)) continue;
+    seen.add(edge.source);
+    sources.push(edge.source);
+  }
+  return sources;
+}
+
+function parseCycleSources(
+  raw: unknown,
+  edges: readonly GraphEdgeSource[]
+): { ok: true; value: string[] } | { ok: false; message: string } {
+  if (raw === undefined || raw === null) return { ok: true, value: defaultCycleSources(edges) };
+  if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string" || item.trim() === "")) {
+    return { ok: false, message: "`cycle_sources` must be a list of edge sources" };
+  }
+  const available = new Set(edges.map((edge) => edge.source));
+  const sources: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!available.has(item)) {
+      return { ok: false, message: "`cycle_sources` must list sources from `edges`" };
+    }
+    if (seen.has(item)) continue;
+    seen.add(item);
+    sources.push(item);
+  }
+  return { ok: true, value: sources };
 }
 
 function parseIdField(raw: unknown): { ok: true; value: string } | { ok: false; message: string } {

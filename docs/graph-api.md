@@ -19,6 +19,7 @@ Recursion lives here. Neither JsonLogic nor DQL can walk a link closure.
     { "source": "depends_on" },
     { "source": "$body", "sections": ["Definition of Done", "Definition"] }
   ],
+  "cycle_sources": ["depends_on"],
   "start": ["alpha"],
   "direction": "in",
   "max_depth": null,
@@ -34,6 +35,7 @@ Recursion lives here. Neither JsonLogic nor DQL can walk a link closure.
 | `scope` | `""` (whole vault) | String. A trailing slash matches descendants only. `Notes` also matches `Notes/a.md`. Trimmed before the index lookup |
 | `id_field` | path | Optional. A non-empty string names the frontmatter field used as the node id. Omit or `null` and each node id is its vault path; edge values then resolve by link resolution and exact path only. A blank string is `400` `` `id_field` must be a non-empty string `` |
 | `edges` | — | Required non-empty list. See below |
+| `cycle_sources` | non-`$body` sources in `edges` | Optional list of `edges[].source` values. Cycles use only these sources. `$body` is left out of the default, so mention edges stay in the response but do not form cycles unless listed here. Duplicates are ignored and the first occurrence wins. A value that is not an `edges[].source` is `400` `` `cycle_sources` must list sources from `edges` ``. A non-list, or a blank entry, is `400` `` `cycle_sources` must be a list of edge sources ``. `[]` reports no cycles. Omit or `null` uses the default, in `edges` order |
 | `start` | omit | Ids or paths. Omit or `null` to export the scope. `[]` is `400` |
 | `direction` | `out` | `out`, `in`, or `both`. Omit or `null` means `out`. Anything else is `400` `direction must be one of: out, in, both` |
 | `max_depth` | `null` | Non-negative integer, or `null` / omit for no depth cap. `0` is the start nodes only |
@@ -103,7 +105,9 @@ in scope. Prefer `status` and `$path` unless the body is required.
   "conflicts": [
     { "id": "shared", "paths": ["Notes/a.md", "Notes/b.md"] }
   ],
-  "cycles": [["alpha", "beta"]],
+  "cycles": [
+    { "ids": ["alpha", "beta"], "sources": ["depends_on"] }
+  ],
   "truncated": false,
   "index_ready": true
 }
@@ -115,7 +119,7 @@ in scope. Prefer `status` and `$path` unless the body is required.
 | `edges` | Stored edges whose endpoints are both selected. `$body` edges include `section` (`string` or `null`). Frontmatter edges omit `section` |
 | `unresolved` | Edge values that did not resolve, limited to selected sources. `$body` entries include `section` |
 | `conflicts` | Ids claimed by more than one note, when one of those notes is selected. `paths` is sorted. The lexicographically first path owns the id; the others use their path as `id` |
-| `cycles` | Strongly connected components of more than one id, using stored edge direction. A one-way link is not a cycle. `direction: "both"` changes which nodes are reached; it does not reverse stored edges for this list. Each component is sorted; the list of components is sorted |
+| `cycles` | Strongly connected components of more than one id, using stored edge direction and only edges whose `source` is in `cycle_sources`. Returned `edges` are not filtered by that list. A one-way link is not a cycle. `direction: "both"` changes which nodes are reached; it does not reverse stored edges for this list. Each component's `ids` are sorted. `sources` is the list that component was computed over, in request order. The list of components is sorted |
 | `truncated` | `true` when the node cap, the edge cap, or the deadline dropped work |
 | `index_ready` | Whether the metadata cache looks settled. See below |
 
