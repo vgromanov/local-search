@@ -248,9 +248,10 @@ reserved `$body` / `$path` / `$mtime` names:
 
 Nodes are ordered by depth, then id. Edges are ordered by from, to, then source.
 `$body` edges also include `section`. `cycles` lists strongly connected components
-of more than one node. A node cap, edge cap, or deadline sets `truncated` and
-still returns 200. Unknown `direction`, empty `edges`, unknown `start` values,
-or a `scope` with no notes returns 400.
+of more than one node, computed over `cycle_sources` (default: every requested
+edge source except `$body`). Each cycle includes that source list. A node cap,
+edge cap, or deadline sets `truncated` and still returns 200. Unknown `direction`,
+empty `edges`, unknown `start` values, or a `scope` with no notes returns 400.
 
 ```bash
 ./scripts/smoke_graph.sh

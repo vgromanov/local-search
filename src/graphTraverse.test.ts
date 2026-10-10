@@ -82,6 +82,20 @@ function request(extra: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
+function structuralAndMentionFiles(): FakeFile[] {
+  return [
+    {
+      path: "a.md",
+      cache: fm({ id: "a", depends_on: "b" }, { links: [link("c", 10)] })
+    },
+    { path: "b.md", cache: fm({ id: "b", depends_on: "a" }) },
+    {
+      path: "c.md",
+      cache: fm({ id: "c" }, { links: [link("a", 10)] })
+    }
+  ];
+}
+
 async function ok(
   files: FakeFile[],
   body: Record<string, unknown>,
@@ -275,8 +289,8 @@ describe("graph traverse export, cycles, and filters", () => {
       request()
     );
     assert.deepEqual(body.cycles, [
-      ["a", "b"],
-      ["c", "d"]
+      { ids: ["a", "b"], sources: ["depends_on"] },
+      { ids: ["c", "d"], sources: ["depends_on"] }
     ]);
     assert.equal(body.truncated, false);
   });
@@ -291,6 +305,51 @@ describe("graph traverse export, cycles, and filters", () => {
     );
     assert.deepEqual(body.cycles, []);
     assert.deepEqual(body.nodes.map((node) => node.id), ["a", "b"]);
+  });
+
+  it("depends_on + $body request reports the same cycles as depends_on only", async () => {
+    const files = structuralAndMentionFiles();
+    const structural = await ok(files, request({ edges: [{ source: "depends_on" }] }));
+    const mixed = await ok(files, request({
+      edges: [{ source: "depends_on" }, { source: BODY_SOURCE }]
+    }));
+    assert.deepEqual(mixed.cycles, structural.cycles);
+    assert.deepEqual(mixed.cycles, [
+      { ids: ["a", "b"], sources: ["depends_on"] }
+    ]);
+    assert.equal(mixed.edges.some((edge) => edge.source === BODY_SOURCE), true);
+    assert.equal(mixed.edges.some((edge) => edge.source === "depends_on"), true);
+
+    const mentionsOnly = await ok(files, request({ edges: [{ source: BODY_SOURCE }] }));
+    assert.deepEqual(mentionsOnly.cycles, []);
+    assert.equal(mentionsOnly.edges.some((edge) => edge.source === BODY_SOURCE), true);
+
+    const none = await ok(files, request({
+      edges: [{ source: "depends_on" }, { source: BODY_SOURCE }],
+      cycle_sources: []
+    }));
+    assert.deepEqual(none.cycles, []);
+    assert.equal(none.edges.length > 0, true);
+  });
+
+  it("cycle_sources $body reports mention SCCs", async () => {
+    const files = structuralAndMentionFiles();
+    const mentions = await ok(files, request({
+      edges: [{ source: "depends_on" }, { source: BODY_SOURCE }],
+      cycle_sources: [BODY_SOURCE]
+    }));
+    assert.deepEqual(mentions.cycles, [
+      { ids: ["a", "c"], sources: [BODY_SOURCE] }
+    ]);
+    assert.equal(mentions.edges.some((edge) => edge.source === "depends_on"), true);
+
+    const both = await ok(files, request({
+      edges: [{ source: "blocks" }, { source: "depends_on" }, { source: BODY_SOURCE }],
+      cycle_sources: ["depends_on", BODY_SOURCE, "depends_on"]
+    }));
+    assert.deepEqual(both.cycles, [
+      { ids: ["a", "b", "c"], sources: ["depends_on", BODY_SOURCE] }
+    ]);
   });
 
   it("keeps section on a filtered body edge and passes embeds through", async () => {
@@ -515,6 +574,14 @@ describe("graph traverse errors and caps", () => {
     const scope = await executeGraphTraverse(deps(files), request({ scope: "Empty/" }));
     assert.equal(scope.ok, false);
     if (!scope.ok) assert.equal(scope.message, "scope has no notes");
+
+    const blankSources = await executeGraphTraverse(deps(files), request({ cycle_sources: [" "] }));
+    assert.equal(blankSources.ok, false);
+    if (!blankSources.ok) assert.equal(blankSources.message, "`cycle_sources` must be a list of edge sources");
+
+    const unknownSource = await executeGraphTraverse(deps(files), request({ cycle_sources: ["blocks"] }));
+    assert.equal(unknownSource.ok, false);
+    if (!unknownSource.ok) assert.equal(unknownSource.message, "`cycle_sources` must list sources from `edges`");
   });
 
   it("rejects malformed request fields", async () => {
@@ -532,6 +599,9 @@ describe("graph traverse errors and caps", () => {
       request({ edges: [{ source: "  " }] }),
       request({ edges: [{ source: "depends_on", sections: [1] }] }),
       request({ edges: [{ source: "depends_on", embeds: "yes" }] }),
+      request({ cycle_sources: "depends_on" }),
+      request({ cycle_sources: [""] }),
+      request({ cycle_sources: ["missing"] }),
       request({ limit_nodes: 0 }),
       request({ limit_edges: 1.2 }),
       request({ timeout_ms: 0 })
@@ -570,7 +640,7 @@ describe("graph traverse errors and caps", () => {
       request({ limit_edges: 1 })
     );
     assert.equal(edges.edges.length, 1);
-    assert.deepEqual(edges.cycles, [["a", "b"]]);
+    assert.deepEqual(edges.cycles, [{ ids: ["a", "b"], sources: ["depends_on"] }]);
     assert.equal(edges.truncated, true);
 
     let calls = 0;
