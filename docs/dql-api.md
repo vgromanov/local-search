@@ -30,9 +30,11 @@ A non-object body is `400` `` `query` must be a string ``.
 
 ### Queries that are accepted
 
-`TABLE`, `LIST`, and `TASK`, including `GROUP BY` and `SORT`. Quoted strings
-and `//` line comments are ignored by the syntax check. The query sent to
-Dataview is unchanged.
+`TABLE`, `LIST`, and `TASK`, including `GROUP BY`, `SORT`, and DQL lambdas
+`(x) => expr` (`map`, `filter`, `all`, `any`, `reduce`, `sort`), including
+when that text sits inside a quoted string. Quoted strings and `//` line
+comments are ignored by the syntax check. The query sent to Dataview is
+unchanged.
 
 ### Queries that are rejected (`400`)
 
@@ -42,7 +44,7 @@ Dataview is unchanged.
 | `CALENDAR queries are not supported` | `CALENDAR`, or a result whose type is `calendar` |
 | `dataviewjs is not supported` | The word `dataviewjs` outside a quoted string or `//` comment |
 | `Inline JavaScript ($=) is not supported` | `$=` outside a quoted string or comment |
-| `JavaScript expressions are not supported` | A `function` keyword used as a call, or `=>` |
+| `JavaScript expressions are not supported` | A `function` keyword used as a call |
 
 Dataview parse failures are also `400`. The message is Dataview's error
 string, including the parser position when Dataview provides one.

@@ -203,9 +203,9 @@ export function rejectQuery(source: string): string | null {
   // `function` as a keyword (`function name(`), not a tag, path, or field
   // such as `#function` or `my-function`. Those contain the same letters
   // after a non-word character, which a bare word-boundary check rejects.
-  if (/\bfunction\s*\*?\s*(?:[A-Za-z_$][\w$]*\s*)?\(/.test(bare) || /=>/.test(bare)) {
-    return JS_EXPR_REJECTED;
-  }
+  // DQL lambdas `(x) => expr` and dotted fields such as `parent.dv.pages`
+  // are Dataview syntax. A parse failure comes back as Dataview's message.
+  if (/\bfunction\s*\*?\s*(?:[A-Za-z_$][\w$]*\s*)?\(/.test(bare)) return JS_EXPR_REJECTED;
   const keyword = /^(TABLE|LIST|TASK|CALENDAR)\b/i.exec(bare);
   if (!keyword) return QUERY_TYPE_REJECTED;
   if (keyword[1].toUpperCase() === "CALENDAR") return CALENDAR_REJECTED;
