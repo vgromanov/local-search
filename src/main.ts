@@ -98,6 +98,30 @@ export default class LocalSmartLookupPlugin extends Plugin {
       }
     });
 
+    // Obsidian fires vault `create` for every existing file while it loads the
+    // vault. Listening before layout-ready enqueued the whole vault on each start
+    // (and OOM'd the renderer), so attach vault listeners only once it's ready.
+    this.app.workspace.onLayoutReady(() => this.registerVaultEvents());
+
+    this.addSettingTab(new LocalSmartLookupSettingTab(this.app, this));
+    this.tryRegisterRestRoutes();
+    this.registerEvent(this.app.workspace.on("obsidian-local-rest-api:loaded" as never, () => {
+      this.tryRegisterRestRoutes();
+    }));
+    this.indexQueue.schedule(2_000);
+
+    new Notice("Local Smart Lookup loaded.");
+  }
+
+  onunload(): void {
+    this.unregisterRestRoutes?.();
+    this.unregisterRestRoutes = null;
+    this.indexQueue?.stop();
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_LOCAL_SMART_LOOKUP);
+    this.vectorStore?.close();
+  }
+
+  private registerVaultEvents(): void {
     this.registerEvent(this.app.vault.on("modify", (file) => {
       if (file instanceof TFile && file.extension === "md") {
         void this.indexQueue.enqueuePath(file.path);
@@ -120,23 +144,6 @@ export default class LocalSmartLookupPlugin extends Plugin {
       const markdownPaths = new Set(this.app.vault.getMarkdownFiles().map((file) => file.path));
       await this.vectorStore.removeMissingPaths(markdownPaths);
     }));
-
-    this.addSettingTab(new LocalSmartLookupSettingTab(this.app, this));
-    this.tryRegisterRestRoutes();
-    this.registerEvent(this.app.workspace.on("obsidian-local-rest-api:loaded" as never, () => {
-      this.tryRegisterRestRoutes();
-    }));
-    this.indexQueue.schedule(2_000);
-
-    new Notice("Local Smart Lookup loaded.");
-  }
-
-  onunload(): void {
-    this.unregisterRestRoutes?.();
-    this.unregisterRestRoutes = null;
-    this.indexQueue?.stop();
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_LOCAL_SMART_LOOKUP);
-    this.vectorStore?.close();
   }
 
   tryRegisterRestRoutes(): void {
