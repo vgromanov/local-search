@@ -4,19 +4,8 @@ import { normalizePath } from "obsidian";
 import type { CompactResult, IndexDecision, LanceVectorStore } from "./vectorStore";
 import { formatBytes } from "./vectorStore";
 import type { VaultIndexer } from "./indexer";
-
-type QueueItem = {
-  path: string;
-  enqueuedAt: string;
-  updatedAt: string;
-  attempts: number;
-  lastError: string;
-};
-
-type StoredQueue = {
-  version: 1;
-  items: QueueItem[];
-};
+import { createCoalescedSaver, parseStoredQueue } from "./queueStore";
+import type { QueueItem, StoredQueue } from "./queueStore";
 
 export type QueueStats = {
   queued: number;
@@ -55,6 +44,7 @@ export class PersistentIndexQueue {
   private stopped = false;
   private stats: QueueStats = emptyStats();
   private maintenanceRunning = false;
+  private readonly save = createCoalescedSaver(() => this.writeQueue());
 
   constructor(
     private app: App,
@@ -69,8 +59,11 @@ export class PersistentIndexQueue {
 
   async load(): Promise<void> {
     if (!(await this.adapter.exists(this.queuePath))) return;
-    const stored = JSON.parse(await this.adapter.read(this.queuePath)) as StoredQueue;
-    this.items = new Map((stored.items ?? []).map((item) => [item.path, item]));
+    const { items, corrupt } = parseStoredQueue(await this.adapter.read(this.queuePath));
+    if (corrupt) {
+      console.warn(`Local Smart Lookup: ${this.queuePath} is empty or unreadable; starting with an empty queue.`);
+    }
+    this.items = new Map(items.map((item) => [item.path, item]));
     this.updateQueuedCount();
   }
 
@@ -249,7 +242,7 @@ export class PersistentIndexQueue {
     });
   }
 
-  private async save(): Promise<void> {
+  private async writeQueue(): Promise<void> {
     this.updateQueuedCount();
     const stored: StoredQueue = {
       version: 1,
