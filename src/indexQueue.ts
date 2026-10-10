@@ -106,7 +106,7 @@ export class PersistentIndexQueue {
     this.maintenanceRunning = true;
     try {
       new Notice("Local Smart Lookup: compacting index (search may slow)...");
-      const result = await this.store.compactUntilStable(3);
+      const result = await this.store.compactUntilStable(5);
       await this.indexer.persistIndexMeta();
       new Notice(
         `Local Smart Lookup: compact done — ${formatBytes(result.beforeBytes)} → ${formatBytes(result.afterBytes)} (${result.passes} pass${result.passes === 1 ? "" : "es"}).`

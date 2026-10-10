@@ -9,6 +9,7 @@ import {
   SCHEMA_VER,
   type IndexMeta
 } from "./schema";
+import { optimizeWithFtsRecovery, shouldRunAnotherOptimizePass } from "./lanceOptimize";
 import type { SearchOptions, SearchResult, VectorRecord } from "./types";
 
 type FtsOptions = {
@@ -1035,7 +1036,12 @@ export class LanceVectorStore {
     const cleanupOlderThan = options.cleanupOlderThan ?? new Date();
     const deleteUnverified = options.deleteUnverified ?? true;
     try {
-      const stats = await table.optimize({ cleanupOlderThan, deleteUnverified });
+      const stats = await optimizeWithFtsRecovery({
+        optimize: () => table.optimize({ cleanupOlderThan, deleteUnverified }),
+        rebuildFts: () => this.ensureLexicalIndexUnlocked(true),
+        onRecover: (error) =>
+          console.warn("Local Smart Lookup optimize panicked; rebuilding lexical index and retrying", error)
+      });
       console.info("Local Smart Lookup optimize", stats);
       return stats ?? null;
     } catch (error) {
@@ -1049,7 +1055,7 @@ export class LanceVectorStore {
    * When free disk is too low for peak rewrite during optimize(), falls back to
    * exporting live rows into a fresh table (no re-embed).
    */
-  async compactUntilStable(maxPasses = 3): Promise<CompactResult> {
+  async compactUntilStable(maxPasses = 5): Promise<CompactResult> {
     return this.withMutationLock(async () => {
       const beforeBytes = await sumDirectoryBytes(this.absoluteDbPath());
       // Compaction writes new live fragments before pruning old ones, so free
@@ -1084,12 +1090,9 @@ export class LanceVectorStore {
         bytesRemovedReported += Number(stats?.prune?.bytesRemoved ?? 0);
         versionsRemovedReported += Number(stats?.prune?.oldVersionsRemoved ?? 0);
         const next = await sumDirectoryBytes(this.absoluteDbPath());
-        // Stabilized within 2% (or grew — stop).
-        if (afterBytes > 0 && next >= afterBytes * 0.98) {
-          afterBytes = next;
-          break;
-        }
+        const keepGoing = shouldRunAnotherOptimizePass(stats, afterBytes, next);
         afterBytes = next;
+        if (!keepGoing) break;
       }
 
       // Refresh FTS after fragment rewrite.
