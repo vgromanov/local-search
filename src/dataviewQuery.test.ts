@@ -237,7 +237,7 @@ describe("POST /dataview/query/", () => {
       ["CALENDAR file.day", "CALENDAR queries are not supported"],
       ["dataviewjs\ndv.pages()", "dataviewjs is not supported"],
       ["$= dv.pages(\"#tag\")", "Inline JavaScript ($=) is not supported"],
-      ["dv.pages(\"#tag\").map(p => p.file.path)", "JavaScript expressions are not supported"],
+      ["dv.pages(\"#tag\").map(p => p.file.path)", "Only TABLE, LIST, and TASK queries are supported"],
       ["function listPages() { return 1 }", "JavaScript expressions are not supported"],
       ["FROM \"Projects\"", "Only TABLE, LIST, and TASK queries are supported"]
     ];
@@ -297,6 +297,34 @@ describe("POST /dataview/query/", () => {
     }
   });
 
+  it("accepts a dotted field path that contains dv", async () => {
+    const queries = [
+      "TABLE parent.dv.pages",
+      "TABLE this.dv.pages",
+      "TABLE file.name WHERE all(map(rows, (r) => r.dv.pages))"
+    ];
+    for (const query of queries) {
+      let seen = "";
+      const outcome = await run(async (source) => {
+        seen = source;
+        return {
+          successful: true,
+          value: { type: "list", values: ["a.md"], primaryMeaning: { type: "path" } }
+        };
+      }, { query });
+      assert.equal(seen, query);
+      assert.equal(outcome.ok, true, query);
+      if (!outcome.ok) return;
+      assert.deepEqual(outcome.body.items, ["a.md"]);
+    }
+
+    const message = "No implementation found for 'parent.dv.pages'";
+    const rejected = await run(async () => ({ successful: false, error: message }), {
+      query: "TABLE parent.dv.pages"
+    });
+    assert.deepEqual(rejected, { ok: false, status: 400, message });
+  });
+
   it("accepts this.app as a field and a path containing -dv.", async () => {
     const queries = [
       "TABLE this.app",
@@ -323,8 +351,7 @@ describe("POST /dataview/query/", () => {
   it("rejects $= dv.pages() and dataviewjs before execution", async () => {
     const cases: Array<[string, string]> = [
       ["$= dv.pages()", "Inline JavaScript ($=) is not supported"],
-      ["dataviewjs", "dataviewjs is not supported"],
-      ["dv.pages(\"#tag\").map(p => p.file.path)", "JavaScript expressions are not supported"]
+      ["dataviewjs", "dataviewjs is not supported"]
     ];
     for (const [query, message] of cases) {
       let called = false;

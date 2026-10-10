@@ -44,7 +44,7 @@ unchanged.
 | `CALENDAR queries are not supported` | `CALENDAR`, or a result whose type is `calendar` |
 | `dataviewjs is not supported` | The word `dataviewjs` outside a quoted string or `//` comment |
 | `Inline JavaScript ($=) is not supported` | `$=` outside a quoted string or comment |
-| `JavaScript expressions are not supported` | A `function` keyword used as a call, or DataviewJS `dv.pages` when `dv` is its own identifier |
+| `JavaScript expressions are not supported` | A `function` keyword used as a call |
 
 Dataview parse failures are also `400`. The message is Dataview's error
 string, including the parser position when Dataview provides one.
