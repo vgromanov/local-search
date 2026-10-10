@@ -9,6 +9,7 @@ import {
   listFrontmatterKeyFilesFromVault,
   listFrontmatterKeysFromVault
 } from "./frontmatterKeys";
+import { openGraphTraverse, registerGraphTraverseRoute } from "./graphTraverse";
 import { l2Normalize } from "./modelClient";
 import { QUERYABLE_FIELDS, SCHEMA_VER } from "./schema";
 import type { ObsidianRestPublicApi } from "./types";
@@ -700,9 +701,15 @@ export function registerRestRoutes(plugin: LocalSmartLookupPlugin): (() => void)
       }
     });
 
+  const graphTraverse = openGraphTraverse(plugin.app);
+  registerGraphTraverseRoute(api, graphTraverse.deps);
+
   registerFrontmatterKeyRoutes(plugin, api);
   registerDataviewQueryRoute(plugin, api);
   registerSiRoutes(plugin, api);
 
-  return () => api.unregister?.();
+  return () => {
+    graphTraverse.dispose();
+    api.unregister?.();
+  };
 }

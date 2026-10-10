@@ -136,6 +136,7 @@ When a REST API plugin with extension support is enabled, routes are registered 
 - `GET /local-smart-lookup/status/`
 - `GET /frontmatter_keys/`
 - `GET /frontmatter_keys/:name/`
+- `POST /graph/traverse/`
 - `GET /si/health/`
 - `GET /si/index_info/`
 - `POST /si/embed_text/`
@@ -177,6 +178,44 @@ Smoke (requires Local REST + `OBSIDIAN_API_KEY`):
 ```bash
 ./scripts/smoke_frontmatter_keys.sh
 ```
+
+### Graph traverse
+
+Read-only bounded walk over the in-memory link graph. `POST /graph/traverse/`
+uses the same Local REST bearer token. `edges[].source` is a frontmatter field
+or `$body` (wikilinks in the note body). `direction` is `out`, `in`, or `both`.
+Omit `start` to export every note in `scope` plus the edges among them.
+
+```json
+{
+  "scope": "Notes/",
+  "id_field": "id",
+  "edges": [{ "source": "depends_on" }, { "source": "$body", "sections": ["Definition of Done"] }],
+  "start": ["alpha"],
+  "direction": "in",
+  "max_depth": null,
+  "include": ["status", "$path"],
+  "limit_nodes": 2000
+}
+```
+
+```json
+{
+  "nodes": [{ "id": "beta", "path": "Notes/beta.md", "depth": 1, "fields": { "status": "ready", "$path": "Notes/beta.md" } }],
+  "edges": [{ "from": "beta", "to": "alpha", "source": "depends_on" }],
+  "unresolved": [],
+  "conflicts": [],
+  "cycles": [],
+  "truncated": false,
+  "index_ready": true
+}
+```
+
+Nodes are ordered by depth, then id. Edges are ordered by from, to, then source.
+`$body` edges also include `section`. `cycles` lists strongly connected components
+of more than one node. A node cap, edge cap, or time cap sets `truncated` to true.
+Unknown `direction`, empty `edges`, unknown `start` values, or a `scope` with no
+notes returns 400.
 
 Semantic Index (`/si/*`) routes use trailing slashes and the Local REST bearer token.
 They are **read-only**, **never rerank**, and use cosine **distance** thresholds
