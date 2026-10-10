@@ -27,7 +27,11 @@ export interface GraphEdgeSource {
 export interface GraphQuery {
   /** Folder prefix. `""` is the whole vault. A trailing slash matches descendants only. */
   scope: string;
-  /** Frontmatter field used as the node id when it is a non-empty scalar. */
+  /**
+   * Frontmatter field used as the node id when it is a non-empty scalar.
+   * An empty string means path identity: every node id is its vault path, and
+   * edge values resolve by link resolution and exact path only.
+   */
   idField: string;
   edges: readonly GraphEdgeSource[];
 }
@@ -342,6 +346,7 @@ function normalizeRef(raw: string): string {
 }
 
 function readId(cache: CachedMetadata | null, idField: string): string | null {
+  if (idField === "") return null;
   const raw = readOwn(cache?.frontmatter, idField);
   if (raw === undefined || Array.isArray(raw)) return null;
   const serialized = serializeValue(raw).value;
@@ -439,7 +444,7 @@ function canonicalizeEdges(edges: readonly GraphEdgeSource[]): CanonEdge[] {
 
 function validateQuery(query: GraphQuery): void {
   if (!query || typeof query.scope !== "string") throw new Error("Graph scope must be a string");
-  if (typeof query.idField !== "string" || query.idField.trim() === "") {
+  if (typeof query.idField !== "string" || (query.idField.trim() === "" && query.idField !== "")) {
     throw new Error("Graph idField must be a non-empty string");
   }
   if (!Array.isArray(query.edges) || query.edges.length === 0) {

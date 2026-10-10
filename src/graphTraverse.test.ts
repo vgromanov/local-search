@@ -174,6 +174,73 @@ describe("graph traverse directions", () => {
     );
     assert.deepEqual(body.nodes.map((node) => node.id), ["a.md"]);
   });
+
+  it("omitted direction matches explicit out", async () => {
+    const explicit = await ok(files, request({ start: ["a"], direction: "out" }));
+    const withoutDirection = request({ start: ["a"] });
+    delete withoutDirection.direction;
+    const omitted = await ok(files, withoutDirection);
+    const missing = await ok(files, request({ start: ["a"], direction: null }));
+    assert.deepEqual(omitted, explicit);
+    assert.deepEqual(missing, explicit);
+    const inbound = await ok(files, request({ start: ["a"], direction: "in" }));
+    assert.notDeepEqual(
+      omitted.nodes.map((node) => node.id),
+      inbound.nodes.map((node) => node.id)
+    );
+  });
+});
+
+describe("graph traverse defaults", () => {
+  it("minimal body {scope, edges} returns 200 and nodes keyed by path", async () => {
+    const files: FakeFile[] = [
+      {
+        path: "Notes/a.md",
+        cache: fm({ id: "alpha", depends_on: ["Notes/b.md", "beta", "alias-c"] })
+      },
+      { path: "Notes/b.md", cache: fm({ id: "beta" }) },
+      { path: "Folder/c.md", cache: fm({ id: "gamma" }) }
+    ];
+    const recorded: unknown[] = [];
+    let handler: ((req: unknown, res: unknown) => Promise<void>) | undefined;
+    registerGraphTraverseRoute({
+      addRoute() {
+        return {
+          post(next) {
+            handler = next;
+          }
+        };
+      }
+    }, deps(files, {}, {
+      index: createIndex(files, (linkpath) => (linkpath === "alias-c" ? "Folder/c.md" : null))
+    }));
+    const response = {
+      status(status: number) {
+        recorded.push(status);
+        return this;
+      },
+      json(payload: unknown) {
+        recorded.push(payload);
+      }
+    };
+    await handler?.({ body: { scope: "Notes/", edges: [{ source: "depends_on" }] } }, response);
+    assert.equal(recorded[0], 200);
+    const body = recorded[1] as GraphTraverseResponse;
+    assert.deepEqual(body.nodes.map((node) => [node.id, node.path, node.depth]), [
+      ["Folder/c.md", "Folder/c.md", 0],
+      ["Notes/a.md", "Notes/a.md", 0],
+      ["Notes/b.md", "Notes/b.md", 0]
+    ]);
+    assert.deepEqual(body.edges, [
+      { from: "Notes/a.md", to: "Folder/c.md", source: "depends_on" },
+      { from: "Notes/a.md", to: "Notes/b.md", source: "depends_on" }
+    ]);
+    assert.deepEqual(body.unresolved, [
+      { from: "Notes/a.md", value: "beta", source: "depends_on" }
+    ]);
+    assert.deepEqual(body.conflicts, []);
+    assert.deepEqual(body.cycles, []);
+  });
 });
 
 describe("graph traverse export, cycles, and filters", () => {
@@ -455,7 +522,8 @@ describe("graph traverse errors and caps", () => {
       null,
       request({ scope: 1 }),
       request({ id_field: "  " }),
-      { id_field: "id", edges: [{ source: "depends_on" }] },
+      request({ id_field: "" }),
+      request({ id_field: 1 }),
       request({ max_depth: -1 }),
       request({ max_depth: 1.5 }),
       request({ include: "status" }),

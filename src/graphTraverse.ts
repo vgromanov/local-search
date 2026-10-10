@@ -535,9 +535,8 @@ function parseRequest(body: unknown): { ok: true; value: ParsedQuery } | { ok: f
   if (record.scope !== undefined && typeof record.scope !== "string") {
     return { ok: false, message: "`scope` must be a string" };
   }
-  if (typeof record.id_field !== "string" || record.id_field.trim() === "") {
-    return { ok: false, message: "`id_field` must be a non-empty string" };
-  }
+  const idField = parseIdField(record.id_field);
+  if (!idField.ok) return idField;
 
   const edges = parseEdges(record.edges);
   if (!edges.ok) return edges;
@@ -560,7 +559,7 @@ function parseRequest(body: unknown): { ok: true; value: ParsedQuery } | { ok: f
     ok: true,
     value: {
       scope: typeof record.scope === "string" ? record.scope : "",
-      idField: record.id_field,
+      idField: idField.value,
       edges: edges.value,
       direction: direction.value,
       maxDepth: maxDepth.value,
@@ -573,7 +572,16 @@ function parseRequest(body: unknown): { ok: true; value: ParsedQuery } | { ok: f
   };
 }
 
+function parseIdField(raw: unknown): { ok: true; value: string } | { ok: false; message: string } {
+  if (raw === undefined || raw === null) return { ok: true, value: "" };
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return { ok: false, message: "`id_field` must be a non-empty string" };
+  }
+  return { ok: true, value: raw };
+}
+
 function parseDirection(raw: unknown): { ok: true; value: Direction } | { ok: false; message: string } {
+  if (raw === undefined || raw === null) return { ok: true, value: "out" };
   if (raw === "out" || raw === "in" || raw === "both") return { ok: true, value: raw };
   return { ok: false, message: "direction must be one of: out, in, both" };
 }
